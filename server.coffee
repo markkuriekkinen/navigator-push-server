@@ -6,8 +6,14 @@ mongoose    = require 'mongoose'
 http        = require 'http'
 https       = require 'https'
 
+# API key from Google (Don't save this in the public repo!)
+GCM_PUSH_API_KEY = require('./secret_keys').GCM_PUSH_API_KEY
+
 NEWS_URL = 'https://www.hsl.fi/en/newsApi/all'
 DISRUPTIONS_URL = 'http://www.poikkeusinfo.fi/xml/v2/en'
+PUSH_URL = 'https://android.googleapis.com/gcm/send'
+PUSH_HOST = 'android.googleapis.com'
+PUSH_URL_PATH = '/gcm/send'
 
 mongoose.connect 'mongodb://localhost/clients', (err) ->
     if err
@@ -15,6 +21,7 @@ mongoose.connect 'mongodb://localhost/clients', (err) ->
     #else
     #    mongoose.connection.db.dropDatabase() # delete old values
 
+# Database schemas
 clientSchema = mongoose.Schema {
     clientId: String  # Google Cloud Messaging register_id for the client
     # array of routes the client is interested in
@@ -40,6 +47,7 @@ messageSchema = mongoose.Schema {
 Client = mongoose.model 'Client', clientSchema
 Message = mongoose.model 'Message', messageSchema
 
+# Database test data
 dbAddTestValues = () -> 
     c1 = new Client
             clientId: 1
@@ -57,12 +65,90 @@ dbAddTestValues = () ->
 dbAddTestValues()
 
 
-
+# TODO URL to which clients POST to register for push updates
 app.post '/registerclient', (req, res) ->
     # client info in JSON: push client id, routes (lines), Helsinki/Espoo/Vantaa internal/Regional
     console.log(req.body)
     # { helsinkiInt: [1, 2], regional: [6,7] }
+    # create a client in database
     
+
+# Push a message to the client. msgId is id value in our message database.
+pushToClient = (msgId) ->
+    # Send HTTP POST request to the GCM push server that will then send it to the client
+    # http://developer.android.com/google/gcm/server-ref.html
+    options = 
+        hostname: PUSH_HOST
+        path: PUSH_URL_PATH
+        method: 'POST'
+        headers: 
+            'Authorization': "key=#{ GCM_PUSH_API_KEY }"
+            'Content-Type': 'application/json'
+            
+    Message.findById msgId, (err, msg) ->
+        if err
+            console.log err
+            return
+        else if msg == null
+            console.log "pushToClient: message not found (id #{ msgId })"
+            return
+        postData = 
+            registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
+            time_to_live: 60 * 60 * 24
+            dry_run: true # TESTING, no message sent to client device, TODO turn off
+            data: # payload to client, data values should be strings
+                disruption_message: msg.message
+                disruption_lines: msg.lines.join() # array to comma-separated string
+                disruption_category: msg.category
+        request = https.request options, (response) ->
+            # response from GCM push server
+            response.setEncoding 'utf8'
+            responseData = ''
+            # gather the whole response body into one string before parsing JSON
+            response.on 'data', (chunk) ->
+                responseData += chunk
+                
+            response.on 'end', ->
+                console.log responseData # TODO test
+                if response.statusCode == 401
+                    console.log "pushToClient: GCM auth error 401"
+                else if response.statusCode == 400
+                    console.log "pushToClient: GCM bad request JSON error"
+                else if 500 <= response.statusCode <= 599
+                    console.log "pushToClient: GCM server error, could retry later but retry not implemented"
+                else if response.statusCode == 200
+                    # success, but nonetheless there may be errors in delivering messages to clients
+                    jsonObj = JSON.parse responseData
+                    if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
+                        # there were some problems
+                        for resObj in jsonObj.results
+                            if resObj.message_id? and resObj.registration_id?
+                                # must replace the client registration id with the new resObj id (canonical id)
+                                # modify database
+                                Client.update { clientId: msg.clientId }, 
+                                        { clientId: resObj.registration_id }, 
+                                        (err, numberAffected, rawResponse) -> console.log err if err
+                                Message.update { clientId: msg.clientId }, 
+                                        { clientId: resObj.registration_id }, 
+                                        (err, numberAffected, rawResponse) -> console.log err if err
+                                # TODO resend?
+                            else if resObj.error?
+                                if resObj.error == 'Unavailable'
+                                    console.log "pushToClient: GCM server unavailable, could retry later but retry not implemented"
+                                else if resObj.error == 'NotRegistered'
+                                    console.log "pushToClient: GCM client not registered, removing client from database"
+                                    Client.remove { clientId: msg.clientId }, (err) -> console.log err if err
+                                    Message.remove { clientId: msg.clientId }, (err) -> console.log err if err
+                                else
+                                    console.log "pushToClient: GCM response error: #{ resObj.error }"
+                    else
+                        # push message successfully sent to GCM servers, no errors
+                        msg.sentToClient = true
+                        msg.save (err) -> console.log "pushToClient: cannot modify message in db" if err
+                    
+        # write data to request body
+        request.write JSON.stringify postData
+        request.end()
 
 # find clients that are using lines (given as array) in the area
 findClients = (lines, areaField, message) ->
@@ -74,11 +160,15 @@ findClients = (lines, areaField, message) ->
                 msg = new Message
                         clientId: client.clientId
                         message: message
-                        lines: lines.join()
+                        lines: lines
                         category: areaField # TODO areaField is not very human-readable
                         sentToClient: false
                         clientHasRead: false
-                msg.save (err) -> console.log err if err
+                msg.save (err, savedMsg) -> 
+                    if err
+                        console.log err
+                    else
+                        pushToClient savedMsg.id
 
     if lines[0] == 'all'
         # find clients that are using any line in the area
@@ -110,7 +200,7 @@ parseNewsResponse = (newsObj) ->
         else if cat == 'U line'
             findClients lines, 'Ulines', node.title
         else
-            console.log "parseNewsResponse unknown Main category: #{ cat }"
+            console.log "parseNewsResponse: unknown Main category: #{ cat }"
             # Sipoo internal line
         
 DISRUPTION_API_LINETYPES = 
@@ -171,7 +261,6 @@ parseDisruptionsResponse = (disrObj) ->
                         findClients lines, area, message if lines.length > 0
                     
 
-# TODO push to clients if necessary by using Google Cloud Messaging
 setInterval( ->
     request = https.request NEWS_URL, (response) ->
         # response from HSL server
@@ -200,17 +289,16 @@ setInterval( ->
         response.on 'end', ->
             xml2js.parseString responseData, (err, result) ->
                 if err
-                    console.log err
+                    console.log "Error in parsing XML response from #{ DISRUPTIONS_URL }: " + err
                 else
                     if not result.DISRUPTIONS.INFO?
                         # disruptions exist
                         parseDisruptionsResponse result
             
-    
     requestDisr.end()
 , 3000)
 
-
-console.log("Listening on port 8080")
-app.listen 8080
+port = 8080
+console.log "Listening on port #{ port }"
+app.listen port
 
