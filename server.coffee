@@ -24,6 +24,8 @@ mongoose.connect 'mongodb://localhost/clients', (err) ->
 # Database schemas
 clientSchema = mongoose.Schema {
     clientId: String  # Google Cloud Messaging register_id for the client
+    
+    # OLD style: these fields are supposed to be removed later. Keeping them until new version is polished.
     # array of routes the client is interested in
     helsinkiIntLines: [String] # Helsinki internal
     espooIntLines: [String]
@@ -34,14 +36,25 @@ clientSchema = mongoose.Schema {
     ferries: [String] # usually only one line "lautta" (to Suomenlinna island)
     Ulines: [String] # with or without U char in the line?
     metro: [String]
+    
+    # NEW style
+    # each section represents one vehicle in the complete route
+    # (e.g, if the client must switch buses once in the route, there are two sections)
+    sections: [{
+        startTime: Date
+        endTime: Date
+        line: String
+        category: String # similar to the categories as seen in the old fields above
+    }]
 }
 messageSchema = mongoose.Schema {
     clientId: String
     message: String
-    lines: [String]
+    lines: [String] # line list from the original HSL message, 
+    # the client is using at least one of these lines
     category: String
     sentToClient: Boolean
-    clientHasRead: Boolean
+    clientHasRead: Boolean # currently unused
 }
 
 Client = mongoose.model 'Client', clientSchema
@@ -52,6 +65,12 @@ dbAddTestValues = () ->
     c1 = new Client
             clientId: 1
             helsinkiIntLines: ['20', '14']
+            sections: [{
+                startTime: new Date()
+                endTime: new Date(new Date().getTime() + 30*60000)
+                line: '14'
+                category: 'helsinkiIntLines'
+            }]
     c2 = new Client
             clientId: 2
             espooIntLines: ['11']
@@ -59,21 +78,35 @@ dbAddTestValues = () ->
             clientId: 3
             trams: ['4']
     c1.save (err) -> console.log err if err
-    c2.save (err) -> console.log err if err
-    c3.save (err) -> console.log err if err
+    #c2.save (err) -> console.log err if err
+    #c3.save (err) -> console.log err if err
 
-dbAddTestValues()
+#dbAddTestValues()
 
 
-# TODO URL to which clients POST to register for push updates
+# clients send HTTP POST to this URL in order to register for push notifications
 app.post '/registerclient', (req, res) ->
-    # client info in JSON: push client id, routes (lines), Helsinki/Espoo/Vantaa internal/Regional
-    console.log(req.body)
-    # { helsinkiInt: [1, 2], regional: [6,7] }
-    # create a client in database
+    # client info in JSON: push client id, routes (lines)
+    console.log(req.body) # test print
+    if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
+        # remove possible old client route data
+        Client.remove { clientId: req.body.registration_id }, ->
+        # create a client in database
+        c = new Client
+                clientId: req.body.registration_id
+                sections: req.body.sections # TODO validate request req.body.sections format?
+                
+        c.save (err) -> console.log err if err
+        res.status(200).end()
+    else
+        # request POST data is invalid
+        res.status(400).end()
     
+# TODO clients should be able to deregister from all push notifications
+app.post '/unregisterclient', (req, res) ->
+    # body should contain GCM registration_id, remove client from database
 
-# Push a message to the client. msgId is id value in our message database.
+# Push a message to the client. msgId is Message._id value in our message database.
 pushToClient = (msgId) ->
     # Send HTTP POST request to the GCM push server that will then send it to the client
     # http://developer.android.com/google/gcm/server-ref.html
@@ -94,8 +127,8 @@ pushToClient = (msgId) ->
             return
         postData = 
             registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
-            time_to_live: 60 * 60 * 24
-            dry_run: true # TESTING, no message sent to client device, TODO turn off
+            time_to_live: 60 * 60 * 24 # TODO could use time values from the client, set time_to_live till the end of the journey
+            #dry_run: true # TESTING, no message sent to client device, TODO turn off
             data: # payload to client, data values should be strings
                 disruption_message: msg.message
                 disruption_lines: msg.lines.join() # array to comma-separated string
@@ -131,7 +164,7 @@ pushToClient = (msgId) ->
                                 Message.update { clientId: msg.clientId }, 
                                         { clientId: resObj.registration_id }, 
                                         (err, numberAffected, rawResponse) -> console.log err if err
-                                # TODO resend?
+                                # TODO resend push?
                             else if resObj.error?
                                 if resObj.error == 'Unavailable'
                                     console.log "pushToClient: GCM server unavailable, could retry later but retry not implemented"
@@ -152,16 +185,16 @@ pushToClient = (msgId) ->
 
 # find clients that are using lines (given as array) in the area
 findClients = (lines, areaField, message) ->
-    createMessages = (err, results) -> 
+    createMessages = (err, clients) -> 
         if err
             console.log err
         else
-            for client in results # create messages to database to be sent to clients later
+            for client in clients # create messages to database to be sent to clients later
                 msg = new Message
                         clientId: client.clientId
                         message: message
                         lines: lines
-                        category: areaField # TODO areaField is not very human-readable
+                        category: areaField # TODO areaField is not very human-readable (should it be?)
                         sentToClient: false
                         clientHasRead: false
                 msg.save (err, savedMsg) -> 
@@ -172,10 +205,12 @@ findClients = (lines, areaField, message) ->
 
     if lines[0] == 'all'
         # find clients that are using any line in the area
-        Client.where(areaField).ne(null).exec createMessages
+        #Client.where(areaField).ne(null).exec createMessages # OLD SCHEMA
+        Client.find "sections.category": areaField, createMessages  # TODO check areaField, must use the same kind of strings everywhere ("helsinkiInt", "helsinkiInternal" ...)
     else
         # find clients that are using at least one of the lines in the area
-        Client.where(areaField).in(lines).exec createMessages
+        #Client.where(areaField).in(lines).exec createMessages  # for OLD client schema
+        Client.find "sections.line": lines, createMessages
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
@@ -215,6 +250,9 @@ DISRUPTION_API_LINETYPES =
     #'14': 'all'
 
 parseDisruptionsResponse = (disrObj) ->
+    # TODO validity time stamps are not being used yet
+    # HSL API description in Finnish (no pdf in English)
+    # http://developer.reittiopas.fi/media/Poikkeusinfo_XML_rajapinta_V2_2_01.pdf
     for key, value of disrObj.DISRUPTIONS
         if key == '$' # XML attributes for root element DISRUPTIONS
         
