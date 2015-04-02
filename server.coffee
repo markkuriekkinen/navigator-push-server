@@ -102,9 +102,18 @@ app.post '/registerclient', (req, res) ->
         # request POST data is invalid
         res.status(400).end()
     
-# TODO clients should be able to deregister from all push notifications
+# clients should be able to deregister from all push notifications
 app.post '/unregisterclient', (req, res) ->
-    # body should contain GCM registration_id, remove client from database
+    # body should contain GCM registration_id, 
+    if req.body.registration_id?
+        # remove client from database
+        Client.remove { clientId: req.body.registration_id }, ->
+        Message.remove { clientId: req.body.registration_id }, ->
+        
+        res.status(200).end()
+    else
+        # request POST data is invalid
+        res.status(400).end()
 
 # Push a message to the client. msgId is Message._id value in our message database.
 pushToClient = (msgId) ->
