@@ -206,20 +206,21 @@ findClients = (lines, areaField, message) ->
                         category: areaField # TODO areaField is not very human-readable (should it be?)
                         sentToClient: false
                         clientHasRead: false
+                        # TODO maybe add time-to-live field here, easier to use it in pushToClient
                 msg.save (err, savedMsg) -> 
                     if err
                         console.log err
                     else
                         pushToClient savedMsg.id
 
-    if lines[0] == 'all'
-        # find clients that are using any line in the area
-        #Client.where(areaField).ne(null).exec createMessages # OLD SCHEMA
-        Client.find "sections.category": areaField, createMessages  # TODO check areaField, must use the same kind of strings everywhere ("helsinkiInt", "helsinkiInternal" ...)
-    else
-        # find clients that are using at least one of the lines in the area
-        #Client.where(areaField).in(lines).exec createMessages  # for OLD client schema
-        Client.find "sections.line": lines, createMessages
+    criteria = 
+        'category': areaField
+    # if lines[0] == 'all', find clients that are using any line in the area
+    criteria.line = lines if lines[0] != 'all' # add lines criteria if searching only for specific lines
+    criteria.startTime = { $lt: disrEndTime } if disrStartTime
+    criteria.endTime = { $gt: disrStartTime } if disrEndTime
+
+    Client.elemMatch 'sections', criteria, createMessages
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
@@ -228,34 +229,34 @@ parseNewsResponse = (newsObj) ->
         lines = node.Lines.split ','
         cat = node['Main category']
         if cat == 'Helsinki internal bus'
-            findClients lines, 'helsinkiIntLines', node.title
+            findClients lines, 'helsinkiInternal', node.title
         else if cat == 'Espoo internal bus'
-            findClients lines, 'espooIntLines', node.title
+            findClients lines, 'espooInternal', node.title
         else if cat == 'Vantaa internal bus'
-            findClients lines, 'vantaaIntLines', node.title
+            findClients lines, 'vantaaInternal', node.title
         else if cat.lastIndexOf('Regional', 0) == 0 # cat.startsWith("Regional")
-            findClients lines, 'regionalLines', node.title
+            findClients lines, 'regional', node.title
         else if cat == 'Tram'
-            findClients lines, 'trams', node.title
+            findClients lines, 'tram', node.title
         else if cat == 'Commuter train'
-            findClients lines, 'trains', node.title
+            findClients lines, 'train', node.title
         else if cat == 'Ferry'
-            findClients lines, 'ferries', node.title
+            findClients lines, 'ferry', node.title
         else if cat == 'U line'
-            findClients lines, 'Ulines', node.title
+            findClients lines, 'Uline', node.title
         else
             console.log "parseNewsResponse: unknown Main category: #{ cat }"
             # Sipoo internal line
         
 DISRUPTION_API_LINETYPES = 
-    '1': 'helsinkiIntLines'
-    '2': 'trams'
-    '3': 'espooIntLines'
-    '4': 'vantaaIntLines'
-    '5': 'regionalLines'
+    '1': 'helsinkiInternal'
+    '2': 'tram'
+    '3': 'espooInternal'
+    '4': 'vantaaInternal'
+    '5': 'regional'
     '6': 'metro'
-    '7': 'ferries'
-    '12': 'trains'
+    '7': 'ferry'
+    '12': 'train'
     #'14': 'all'
 
 parseDisruptionsResponse = (disrObj) ->
@@ -267,24 +268,27 @@ parseDisruptionsResponse = (disrObj) ->
         
         else if key == 'DISRUPTION'
             for disrObj in value
+                # disrObj is one disruption message (one DISRUPTION element from the original XML)
                 isValid = false
                 message = ''
                 linesByArea = {
-                    helsinkiIntLines: []
-                    espooIntLines: []
-                    vantaaIntLines: []
-                    regionalLines: []
-                    trams: []
-                    trains: []
-                    ferries: []
-                    Ulines: []
+                    # these keys must match the values of the object DISRUPTION_API_LINETYPES
+                    helsinkiInternal: []
+                    espooInternal: []
+                    vantaaInternal: []
+                    regional: []
+                    tram: []
+                    train: []
+                    ferry: []
+                    Uline: []
                     metro: []
                 }
                 for dkey, dval of disrObj
                     if dkey == 'VALIDITY'
                         isValid = true if dval[0]['$'].status == '1'
-                        # .from, .to
+                        # .from, .to # TODO parse start/end times and give to function findClients
                     else if dkey == 'INFO'
+                        # human-readable description
                         message = dval[0]['TEXT'][0]['_'].trim()
                     else if dkey == 'TARGETS'
                         targets = dval[0] # only one TARGETS element
@@ -296,6 +300,8 @@ parseDisruptionsResponse = (disrObj) ->
                             #else if linetype == '14' # all areas
                             
                         else if targets.LINE?
+                            # list of line elements that specify single affected lines
+                            # parsed XML: $ for attributes, _ for textual element content
                             for lineElem in targets.LINE
                                 if lineElem['$'].linetype of DISRUPTION_API_LINETYPES
                                     linesByArea[DISRUPTION_API_LINETYPES[lineElem['$'].linetype]].push lineElem['_']
