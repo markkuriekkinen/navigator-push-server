@@ -70,7 +70,7 @@ dbAddTestValues = () ->
                 startTime: new Date()
                 endTime: new Date(new Date().getTime() + 30*60000)
                 line: '14'
-                category: 'helsinkiIntLines'
+                category: 'helsinkiInternal'
             }]
     c2 = new Client
             clientId: 2
@@ -135,10 +135,16 @@ pushToClient = (msgId) ->
         else if msg == null
             console.log "pushToClient: message not found (id #{ msgId })"
             return
+        timeToLive = 
+            if msg.validThrough?
+                # set time_to_live till the end of the journey in seconds
+                (msg.validThrough.getTime() - new Date().getTime()) / 1000
+            else
+                60 * 60 * 24 # 24 h
         postData = 
             registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
-            time_to_live: (msg.validThrough.getTime() - new Date().getTime()) / 1000 # set time_to_live till the end of the journey in seconds
-            #dry_run: true # TESTING, no message sent to client device, TODO turn off
+            time_to_live: timeToLive
+            dry_run: true # TESTING, no message sent to client device, TODO turn off
             data: # payload to client, data values should be strings
                 disruption_message: msg.message
                 disruption_lines: msg.lines.join() # array to comma-separated string
@@ -217,11 +223,11 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     criteria = 
         'category': areaField
     # if lines[0] == 'all', find clients that are using any line in the area
-    criteria.line = lines if lines[0] != 'all' # add lines criteria if searching only for specific lines
+    criteria.line = { $in: lines } if lines[0] != 'all' # add lines criteria if searching only for specific lines
     criteria.startTime = { $lt: disrEndTime } if disrStartTime
     criteria.endTime = { $gt: disrStartTime } if disrEndTime
 
-    Client.elemMatch 'sections', criteria, createMessages
+    Client.where('sections').elemMatch(criteria).exec createMessages
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
