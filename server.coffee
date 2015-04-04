@@ -55,6 +55,7 @@ messageSchema = mongoose.Schema {
     category: String
     sentToClient: Boolean
     clientHasRead: Boolean # currently unused
+    validThrough: Date
 }
 
 Client = mongoose.model 'Client', clientSchema
@@ -136,7 +137,7 @@ pushToClient = (msgId) ->
             return
         postData = 
             registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
-            time_to_live: 60 * 60 * 24 # TODO could use time values from the client, set time_to_live till the end of the journey
+            time_to_live: (msg.validThrough.getTime() - new Date().getTime()) / 1000 # set time_to_live till the end of the journey in seconds
             #dry_run: true # TESTING, no message sent to client device, TODO turn off
             data: # payload to client, data values should be strings
                 disruption_message: msg.message
@@ -193,7 +194,7 @@ pushToClient = (msgId) ->
         request.end()
 
 # find clients that are using lines (given as array) in the area
-findClients = (lines, areaField, message) ->
+findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     createMessages = (err, clients) -> 
         if err
             console.log err
@@ -206,7 +207,7 @@ findClients = (lines, areaField, message) ->
                         category: areaField # TODO areaField is not very human-readable (should it be?)
                         sentToClient: false
                         clientHasRead: false
-                        # TODO maybe add time-to-live field here, easier to use it in pushToClient
+                        validThrough: disrEndTime
                 msg.save (err, savedMsg) -> 
                     if err
                         console.log err
@@ -228,6 +229,7 @@ parseNewsResponse = (newsObj) ->
         node = node.node
         lines = node.Lines.split ','
         cat = node['Main category']
+        # the news do not contain easily parsable dates for the validity period
         if cat == 'Helsinki internal bus'
             findClients lines, 'helsinkiInternal', node.title
         else if cat == 'Espoo internal bus'
@@ -260,7 +262,6 @@ DISRUPTION_API_LINETYPES =
     #'14': 'all'
 
 parseDisruptionsResponse = (disrObj) ->
-    # TODO validity time stamps are not being used yet
     # HSL API description in Finnish (no pdf in English)
     # http://developer.reittiopas.fi/media/Poikkeusinfo_XML_rajapinta_V2_2_01.pdf
     for key, value of disrObj.DISRUPTIONS
@@ -270,6 +271,8 @@ parseDisruptionsResponse = (disrObj) ->
             for disrObj in value
                 # disrObj is one disruption message (one DISRUPTION element from the original XML)
                 isValid = false
+                disrStartTime = null
+                disrEndTime = null
                 message = ''
                 linesByArea = {
                     # these keys must match the values of the object DISRUPTION_API_LINETYPES
@@ -286,7 +289,8 @@ parseDisruptionsResponse = (disrObj) ->
                 for dkey, dval of disrObj
                     if dkey == 'VALIDITY'
                         isValid = true if dval[0]['$'].status == '1'
-                        # .from, .to # TODO parse start/end times and give to function findClients
+                        disrStartTime = new Date(dval[0]['$'].from)
+                        disrEndTime = new Date(dval[0]['$'].to)
                     else if dkey == 'INFO'
                         # human-readable description
                         message = dval[0]['TEXT'][0]['_'].trim()
@@ -311,7 +315,7 @@ parseDisruptionsResponse = (disrObj) ->
                     
                 if isValid
                     for area, lines of linesByArea
-                        findClients lines, area, message if lines.length > 0
+                        findClients lines, area, message, disrStartTime, disrEndTime if lines.length > 0
                     
 
 setInterval( ->
