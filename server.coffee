@@ -123,6 +123,10 @@ dbAddTestValues = () ->
 #dbAddTestValues()
 
 
+app.use bodyParser.json()
+app.use bodyParser.urlencoded(extended: true)  # extended allows nested objects
+
+
 # clients send HTTP POST to this URL in order to register for push notifications
 app.post '/registerclient', (req, res) ->
     # client info in JSON: push client id, routes (lines)
