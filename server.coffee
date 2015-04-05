@@ -5,6 +5,7 @@ xml2js      = require 'xml2js'
 mongoose    = require 'mongoose'
 http        = require 'http'
 https       = require 'https'
+crypto      = require 'crypto'
 
 # API key from Google (Don't save this in the public repo!)
 GCM_PUSH_API_KEY = require('./secret_keys').GCM_PUSH_API_KEY
@@ -47,19 +48,56 @@ clientSchema = mongoose.Schema {
         category: String # similar to the categories as seen in the old fields above
     }]
 }
-messageSchema = mongoose.Schema {
-    clientId: String
-    message: String
-    lines: [String] # line list from the original HSL message, 
-    # the client is using at least one of these lines
-    category: String
-    sentToClient: Boolean
-    clientHasRead: Boolean # currently unused
-    validThrough: Date
+
+sentMessageHashSchema = mongoose.Schema {
+    _id:  # binary sha1 hash of client id and message data
+        type: Buffer
+        unique: true
+    expirationTime:  # MongoDB will autoremove this after this time
+        type: Date
+        # delete after this many seconds after expirationTime (should
+        # be >0 to guard against clock skew and other weirdness)
+        expires: 60*60*24
 }
 
+# Calculate message hash and store it in the database. Return
+# promise. If the hash is not yet in the database, the hash document
+# is passed to promise and callback as argument. If the hash is
+# already in the DB, the argument is null.
+sentMessageHashSchema.statics.storeHash = (message, callback) ->
+    # calculate hash
+    lines = message.lines
+    lines.sort()
+    sha1 = crypto.createHash 'sha1'
+    sha1.update message.clientId, 'utf8'
+    sha1.update "\0", 'ascii'
+    for line in lines
+        sha1.update line, 'utf8'
+        sha1.update "\0", 'ascii'
+    sha1.update message.message, 'utf8'
+    hash = sha1.digest()
+
+    # try to store, handle duplicates
+    promise = new mongoose.Promise(callback)
+    @create(
+        { _id: hash, expirationTime: message.validThrough },
+        (err, hashDoc) ->
+            if err
+                # MongoDB returns error code 11000 (or possibly 11001,
+                # it's poorly documented) when trying to insert
+                # duplicate keys. If this error occurs, the message
+                # has already been sent.
+                if err.code in [11000, 11001]
+                    promise.fulfill null
+                else
+                    promise.reject err
+            else
+                promise.fulfill hashDoc
+    )
+    promise
+
 Client = mongoose.model 'Client', clientSchema
-Message = mongoose.model 'Message', messageSchema
+SentMessageHash = mongoose.model 'SentMessageHash', sentMessageHashSchema
 
 # Database test data
 dbAddTestValues = () -> 
@@ -109,95 +147,87 @@ app.post '/unregisterclient', (req, res) ->
     if req.body.registration_id?
         # remove client from database
         Client.remove { clientId: req.body.registration_id }, ->
-        Message.remove { clientId: req.body.registration_id }, ->
         
         res.status(200).end()
     else
         # request POST data is invalid
         res.status(400).end()
 
-# Push a message to the client. msgId is Message._id value in our message database.
-pushToClient = (msgId) ->
+# Push a message to the client.
+pushToClient = (msg) ->
     # Send HTTP POST request to the GCM push server that will then send it to the client
     # http://developer.android.com/google/gcm/server-ref.html
-    options = 
-        hostname: PUSH_HOST
-        path: PUSH_URL_PATH
-        method: 'POST'
-        headers: 
-            'Authorization': "key=#{ GCM_PUSH_API_KEY }"
-            'Content-Type': 'application/json'
-            
-    Message.findById msgId, (err, msg) ->
+    SentMessageHash.storeHash msg, (err, msgHashDoc) ->
         if err
-            console.log err
+            console.error err
+        else if msgHashDoc?  # if null, the message has already been sent
+            options =
+                hostname: PUSH_HOST
+                path: PUSH_URL_PATH
+                method: 'POST'
+                headers:
+                    'Authorization': "key=#{ GCM_PUSH_API_KEY }"
+                    'Content-Type': 'application/json'
+            
+            timeToLive =
+                if msg.validThrough?
+                    # set time_to_live till the end of the journey in seconds
+                    (msg.validThrough.getTime() - new Date().getTime()) / 1000
+                else
+                    60 * 60 * 24 # 24 h
+            postData =
+                registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
+                time_to_live: timeToLive
+                dry_run: true # TESTING, no message sent to client device, TODO turn off
+                data: # payload to client, data values should be strings
+                    disruption_message: msg.message
+                    disruption_lines: msg.lines.join() # array to comma-separated string
+                    disruption_category: msg.category
+            
+            console.log require('util').inspect(postData)
             return
-        else if msg == null
-            console.log "pushToClient: message not found (id #{ msgId })"
-            return
-        timeToLive = 
-            if msg.validThrough?
-                # set time_to_live till the end of the journey in seconds
-                (msg.validThrough.getTime() - new Date().getTime()) / 1000
-            else
-                60 * 60 * 24 # 24 h
-        postData = 
-            registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
-            time_to_live: timeToLive
-            dry_run: true # TESTING, no message sent to client device, TODO turn off
-            data: # payload to client, data values should be strings
-                disruption_message: msg.message
-                disruption_lines: msg.lines.join() # array to comma-separated string
-                disruption_category: msg.category
-        request = https.request options, (response) ->
-            # response from GCM push server
-            response.setEncoding 'utf8'
-            responseData = ''
-            # gather the whole response body into one string before parsing JSON
-            response.on 'data', (chunk) ->
-                responseData += chunk
-                
-            response.on 'end', ->
-                console.log responseData # TODO test
-                if response.statusCode == 401
-                    console.log "pushToClient: GCM auth error 401"
-                else if response.statusCode == 400
-                    console.log "pushToClient: GCM bad request JSON error"
-                else if 500 <= response.statusCode <= 599
-                    console.log "pushToClient: GCM server error, could retry later but retry not implemented"
-                else if response.statusCode == 200
-                    # success, but nonetheless there may be errors in delivering messages to clients
-                    jsonObj = JSON.parse responseData
-                    if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
-                        # there were some problems
-                        for resObj in jsonObj.results
-                            if resObj.message_id? and resObj.registration_id?
-                                # must replace the client registration id with the new resObj id (canonical id)
-                                # modify database
-                                Client.update { clientId: msg.clientId }, 
-                                        { clientId: resObj.registration_id }, 
-                                        (err, numberAffected, rawResponse) -> console.log err if err
-                                Message.update { clientId: msg.clientId }, 
-                                        { clientId: resObj.registration_id }, 
-                                        (err, numberAffected, rawResponse) -> console.log err if err
-                                # TODO resend push?
-                            else if resObj.error?
-                                if resObj.error == 'Unavailable'
-                                    console.log "pushToClient: GCM server unavailable, could retry later but retry not implemented"
-                                else if resObj.error == 'NotRegistered'
-                                    console.log "pushToClient: GCM client not registered, removing client from database"
-                                    Client.remove { clientId: msg.clientId }, (err) -> console.log err if err
-                                    Message.remove { clientId: msg.clientId }, (err) -> console.log err if err
-                                else
-                                    console.log "pushToClient: GCM response error: #{ resObj.error }"
-                    else
-                        # push message successfully sent to GCM servers, no errors
-                        msg.sentToClient = true
-                        msg.save (err) -> console.log "pushToClient: cannot modify message in db" if err
+            request = https.request options, (response) ->
+                # response from GCM push server
+                response.setEncoding 'utf8'
+                responseData = ''
+                # gather the whole response body into one string before parsing JSON
+                response.on 'data', (chunk) ->
+                    responseData += chunk
                     
-        # write data to request body
-        request.write JSON.stringify postData
-        request.end()
+                response.on 'end', ->
+                    console.log responseData # TODO test
+                    if response.statusCode == 401
+                        console.log "pushToClient: GCM auth error 401"
+                    else if response.statusCode == 400
+                        console.log "pushToClient: GCM bad request JSON error"
+                    else if 500 <= response.statusCode <= 599
+                        console.log "pushToClient: GCM server error, could retry later but retry not implemented"
+                    else if response.statusCode == 200
+                        # success, but nonetheless there may be errors in delivering messages to clients
+                        jsonObj = JSON.parse responseData
+                        if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
+                            # there were some problems
+                            for resObj in jsonObj.results
+                                if resObj.message_id? and resObj.registration_id?
+                                    # must replace the client registration id with the new resObj id (canonical id)
+                                    # modify database
+                                    Client.update { clientId: msg.clientId },
+                                        { clientId: resObj.registration_id },
+                                        (err, numberAffected, rawResponse) -> console.log err if err
+                                    # TODO resend push?
+                                else if resObj.error?
+                                    if resObj.error == 'Unavailable'
+                                        console.log "pushToClient: GCM server unavailable, could retry later but retry not implemented"
+                                    else if resObj.error == 'NotRegistered'
+                                        console.log "pushToClient: GCM client not registered, removing client from database"
+                                        Client.remove { clientId: msg.clientId }, (err) -> console.log err if err
+                                        msgHashDoc.remove (err) -> console.log err if err
+                                    else
+                                        console.log "pushToClient: GCM response error: #{ resObj.error }"
+            
+            # write data to request body
+            request.write JSON.stringify postData
+            request.end()
 
 # find clients that are using lines (given as array) in the area
 findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
@@ -206,19 +236,14 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
             console.log err
         else
             for client in clients # create messages to database to be sent to clients later
-                msg = new Message
-                        clientId: client.clientId
-                        message: message
-                        lines: lines
-                        category: areaField # TODO areaField is not very human-readable (should it be?)
-                        sentToClient: false
-                        clientHasRead: false
-                        validThrough: disrEndTime
-                msg.save (err, savedMsg) -> 
-                    if err
-                        console.log err
-                    else
-                        pushToClient savedMsg.id
+                pushToClient
+                    clientId: client.clientId
+                    message: message
+                    lines: lines
+                    category: areaField # TODO areaField is not very human-readable (should it be?)
+                    sentToClient: false
+                    clientHasRead: false
+                    validThrough: disrEndTime
 
     criteria = 
         'category': areaField
