@@ -188,8 +188,8 @@ pushToClient = (msg) ->
                     disruption_lines: msg.lines.join() # array to comma-separated string
                     disruption_category: msg.category
             
-            console.log require('util').inspect(postData)
-            return
+            # console.log require('util').inspect(postData)
+            # return
             request = https.request options, (response) ->
                 # response from GCM push server
                 response.setEncoding 'utf8'
