@@ -133,14 +133,18 @@ app.post '/registerclient', (req, res) ->
     console.log(req.body) # test print
     if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
         # remove possible old client route data
-        Client.remove { clientId: req.body.registration_id }, ->
-        # create a client in database
-        c = new Client
-                clientId: req.body.registration_id
-                sections: req.body.sections # TODO validate request req.body.sections format?
-                
-        c.save (err) -> console.log err if err
-        res.status(200).end()
+        Client.remove(clientId: req.body.registration_id).exec()
+            .then ->
+                # create a client in database
+                c = new Client
+                    clientId: req.body.registration_id
+                    sections: req.body.sections # TODO validate request req.body.sections format?
+                c.save()
+            .onFulfill ->
+                res.status(200).end()
+            .onReject (err) ->
+                console.error err
+                res.status(500).end()
     else
         # request POST data is invalid
         res.status(400).end()
@@ -150,9 +154,12 @@ app.post '/unregisterclient', (req, res) ->
     # body should contain GCM registration_id, 
     if req.body.registration_id?
         # remove client from database
-        Client.remove { clientId: req.body.registration_id }, ->
-        
-        res.status(200).end()
+        Client.remove(clientId: req.body.registration_id).exec()
+            .onFulfill ->
+                res.status(200).end()
+            .onReject (err) ->
+                console.error err
+                res.status(500).end()
     else
         # request POST data is invalid
         res.status(400).end()
