@@ -235,6 +235,7 @@ pushToClient = (msg) ->
                                         msgHashDoc.remove (err) -> console.log err if err
                                     else
                                         console.log "pushToClient: GCM response error: #{ resObj.error }"
+                    return
             
             # write data to request body
             request.write JSON.stringify postData
@@ -255,6 +256,7 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
                     sentToClient: false
                     clientHasRead: false
                     validThrough: disrEndTime
+        return
 
     criteria = 
         'category': areaField
@@ -291,6 +293,7 @@ parseNewsResponse = (newsObj) ->
         else
             console.log "parseNewsResponse: unknown Main category: #{ cat }"
             # Sipoo internal line
+    return
         
 DISRUPTION_API_LINETYPES = 
     '1': 'helsinkiInternal'
@@ -358,7 +361,8 @@ parseDisruptionsResponse = (disrObj) ->
                 if isValid
                     for area, lines of linesByArea
                         findClients lines, area, message, disrStartTime, disrEndTime if lines.length > 0
-                    
+    return
+
 
 setInterval( ->
     request = https.request NEWS_URL, (response) ->
