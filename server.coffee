@@ -24,7 +24,10 @@ mongoose.connect 'mongodb://localhost/clients', (err) ->
 
 # Database schemas
 clientSchema = mongoose.Schema {
-    clientId: String  # Google Cloud Messaging register_id for the client
+    clientId:  # Google Cloud Messaging register_id for the client
+        type: String
+        required: true
+        minLength: 1
     
     # OLD style: these fields are supposed to be removed later. Keeping them until new version is polished.
     # array of routes the client is interested in
@@ -42,12 +45,47 @@ clientSchema = mongoose.Schema {
     # each section represents one vehicle in the complete route
     # (e.g, if the client must switch buses once in the route, there are two sections)
     sections: [{
-        startTime: Date
-        endTime: Date
-        line: String
-        category: String # similar to the categories as seen in the old fields above
-    }]
+        startTime:
+            type: Date
+            required: true
+        endTime:
+            type: Date
+            required: true
+        line:
+            type: String
+            required: true
+        category:  # similar to the categories as seen in the old fields above
+            type: String
+            required: true
+    }],
 }
+
+clientSchema.pre 'validate', (next) ->
+    unless @sections.length > 0
+        @invalidate "sections", "At least one section required", @sections
+        next()
+        return
+    
+    now = Date.now()
+    min = now - 1000*60*60*24*2
+    max = now + 1000*60*60*24*2
+    for sec, i in @sections
+        unless sec.startTime > min
+            @invalidate "sections.#{i}.startTime",
+                "startTime invalid or too far in the past",
+                sec.startTime
+        unless sec.endTime < max
+            @invalidate "sections.#{i}.endTime",
+                "endTime invalid or too far in the future",
+                sec.endTime
+        unless sec.startTime <= sec.endTime
+            @invalidate "sections.#{i}.startTime",
+                "startTime invalid or > endTime",
+                sec.startTime
+            @invalidate "sections.#{i}.endTime",
+                "endTime invalid or < startTime",
+                sec.endTime
+    next()
 
 sentMessageHashSchema = mongoose.Schema {
     _id:  # binary sha1 hash of client id and message data
@@ -138,13 +176,17 @@ app.post '/registerclient', (req, res) ->
                 # create a client in database
                 c = new Client
                     clientId: req.body.registration_id
-                    sections: req.body.sections # TODO validate request req.body.sections format?
+                    sections: req.body.sections
                 c.save()
             .onFulfill ->
                 res.status(200).end()
             .onReject (err) ->
-                console.error err
-                res.status(500).end()
+                if err instanceof mongoose.Error.ValidationError
+                    # request POST data failed validation
+                    res.status(400).end()
+                else
+                    console.error err
+                    res.status(500).end()
     else
         # request POST data is invalid
         res.status(400).end()
