@@ -249,34 +249,51 @@ pushToClient = (msg) ->
                     
                 response.on 'end', ->
                     console.log responseData # TODO test
-                    if response.statusCode == 401
-                        console.log "pushToClient: GCM auth error 401"
-                    else if response.statusCode == 400
-                        console.log "pushToClient: GCM bad request JSON error"
-                    else if 500 <= response.statusCode <= 599
-                        console.log "pushToClient: GCM server error, could retry later but retry not implemented"
-                    else if response.statusCode == 200
-                        # success, but nonetheless there may be errors in delivering messages to clients
-                        jsonObj = JSON.parse responseData
-                        if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
-                            # there were some problems
-                            for resObj in jsonObj.results
-                                if resObj.message_id? and resObj.registration_id?
-                                    # must replace the client registration id with the new resObj id (canonical id)
-                                    # modify database
-                                    Client.update { clientId: msg.clientId },
-                                        { clientId: resObj.registration_id },
-                                        (err, numberAffected, rawResponse) -> console.log err if err
-                                    # TODO resend push?
-                                else if resObj.error?
-                                    if resObj.error == 'Unavailable'
-                                        console.log "pushToClient: GCM server unavailable, could retry later but retry not implemented"
-                                    else if resObj.error == 'NotRegistered'
-                                        console.log "pushToClient: GCM client not registered, removing client from database"
-                                        Client.remove { clientId: msg.clientId }, (err) -> console.log err if err
-                                        msgHashDoc.remove (err) -> console.log err if err
-                                    else
-                                        console.log "pushToClient: GCM response error: #{ resObj.error }"
+                    try
+                        if response.statusCode == 401
+                            raise "GCM auth error 401"
+                        else if response.statusCode == 400
+                            raise "GCM bad request JSON error"
+                        else if 500 <= response.statusCode <= 599
+                            raise "GCM server error, could retry later
+                                   but retry not implemented"
+                        else if response.statusCode == 200
+                            # success, but nonetheless there may be
+                            # errors in delivering messages to clients
+                            try
+                                jsonObj = JSON.parse responseData
+                            catch
+                                raise "GCM response JSON parse error"
+                            
+                            if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
+                                # there were some problems
+                                for resObj in jsonObj.results
+                                    if resObj.message_id? and resObj.registration_id?
+                                        # must replace the client registration id with
+                                        # the new resObj id (canonical id)
+                                        # modify database
+                                        Client.update { clientId: msg.clientId },
+                                            { clientId: resObj.registration_id },
+                                            (err, numberAffected, rawResponse) ->
+                                                console.log err if err
+                                        # TODO resend push?
+                                    else if resObj.error?
+                                        if resObj.error == 'Unavailable'
+                                            raise "GCM server unavailable, could retry
+                                                   later but retry not implemented"
+                                        else if resObj.error == 'NotRegistered'
+                                            Client.remove { clientId: msg.clientId }, (err) ->
+                                                console.log err if err
+                                            raise "GCM client not registered,
+                                                   removing client from database"
+                                        else
+                                            raise "GCM response error: #{ resObj.error }"
+                        else
+                            raise "unknown GCM response status code: #{response.statusCode}"
+                    
+                    catch errMsg
+                        console.error "pushToClient: #{errMsg}"
+                        msgHashDoc.remove (err) -> console.log err if err
                     return
             
             # write data to request body
