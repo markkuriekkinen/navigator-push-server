@@ -203,7 +203,7 @@ app.post '/unregisterclient', (req, res) ->
 # Push a message to the client.
 # Parameter msg is a plain JS object with keys:
 # clientId, message, lines, category, validThrough
-pushToClient = (msg) ->
+pushToClient = (msg, retryTimeout = 1000) ->
     # Send HTTP POST request to the GCM push server that will then send it to the client
     # http://developer.android.com/google/gcm/server-ref.html
     SentMessageHash.storeHash msg, (err, msgHashDoc) ->
@@ -251,8 +251,15 @@ pushToClient = (msg) ->
                         else if response.statusCode == 400
                             raise "GCM bad request JSON error"
                         else if 500 <= response.statusCode <= 599
-                            raise "GCM server error, could retry later
-                                   but retry not implemented"
+                            # GCM server error, retry later
+                            # remove the message document before trying to push it again
+                            msgHashDoc.remove (err) -> console.log err if err
+                            timeout =
+                                if 'retry-after' of response.headers
+                                    parseHttpRetryAfter response.headers['retry-after']
+                                else
+                                    retryTimeout
+                            scheduleMessagePush msg, timeout
                         else if response.statusCode == 200
                             # success, but nonetheless there may be
                             # errors in delivering messages to clients
@@ -272,11 +279,19 @@ pushToClient = (msg) ->
                                             { clientId: resObj.registration_id },
                                             (err, numberAffected, rawResponse) ->
                                                 console.log err if err
-                                        # TODO resend push?
+                                        # no need to resend, GCM just informed us
+                                        # that the registration id was changed
                                     else if resObj.error?
                                         if resObj.error == 'Unavailable'
-                                            raise "GCM server unavailable, could retry
-                                                   later but retry not implemented"
+                                            # GCM server unavailable, retry
+                                            # remove the message document before trying to push it again
+                                            msgHashDoc.remove (err) -> console.log err if err
+                                            timeout =
+                                                if 'retry-after' of response.headers
+                                                    parseHttpRetryAfter response.headers['retry-after']
+                                                else
+                                                    retryTimeout
+                                            scheduleMessagePush msg, timeout
                                         else if resObj.error == 'NotRegistered'
                                             Client.remove { clientId: msg.clientId }, (err) ->
                                                 console.log err if err
@@ -319,6 +334,26 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     criteria.endTime = { $gt: disrStartTime } if disrEndTime
 
     Client.where('sections').elemMatch(criteria).exec createMessages
+
+# Set a message push to occur in millisecs time. The push message will be
+# sent to the GCM servers but it is still up to them to decide when
+# the message is really sent to client devices.
+scheduleMessagePush = (msg, inmillisecs) ->
+    # double the timeout for the possible next retry after this one
+    # (exponential back-off)
+    action = () -> pushToClient msg, 2 * inmillisecs
+    setTimeout action, inmillisecs
+
+# HTTP retry-after header may be a date string or a decimal integer in seconds.
+# Return the timeout in milliseconds from this moment.
+parseHttpRetryAfter = (retryAfterValue) ->
+    if isNaN retryAfterValue
+        # header contains a date string,
+        # get time in milliseconds from this moment to that moment
+        new Date(retryAfterValue).getTime() - new Date().getTime()
+    else
+        # header is integer in seconds
+        1000 * parseInt retryAfterValue, 10
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
