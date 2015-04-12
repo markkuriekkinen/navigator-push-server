@@ -16,6 +16,11 @@ PUSH_URL = 'https://android.googleapis.com/gcm/send'
 PUSH_HOST = 'android.googleapis.com'
 PUSH_URL_PATH = '/gcm/send'
 
+# Expiration time in milliseconds for messages without end
+# time. Should be larger than maximum age of typical such message.
+DEFAULT_MSG_EXPIRATION = 1000*60*60*24*366
+
+
 mongoose.connect 'mongodb://localhost/clients', (err) ->
     if err
         console.log 'ERROR in connecting to database: ' + err
@@ -109,13 +114,19 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
     for line in lines
         sha1.update line, 'utf8'
         sha1.update "\0", 'ascii'
+    sha1.update message.category, 'utf8'
+    sha1.update "\0", 'ascii'
     sha1.update message.message, 'utf8'
     hash = sha1.digest()
 
     # try to store, handle duplicates
     promise = new mongoose.Promise(callback)
     @create(
-        { _id: hash, expirationTime: message.validThrough },
+        {
+            _id: hash
+            expirationTime:
+                message.validThrough ? (Date.now() + DEFAULT_MSG_EXPIRATION)
+        },
         (err, hashDoc) ->
             if err
                 # MongoDB returns error code 11000 (or possibly 11001,
