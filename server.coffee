@@ -112,6 +112,8 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
     for line in lines
         sha1.update line, 'utf8'
         sha1.update "\0", 'ascii'
+    sha1.update message.category, 'utf8'
+    sha1.update "\0", 'ascii'
     sha1.update message.message, 'utf8'
     hash = sha1.digest()
 
