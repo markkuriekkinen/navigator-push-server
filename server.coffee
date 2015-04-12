@@ -258,9 +258,9 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     console.log responseData # TODO test
                     try
                         if response.statusCode == 401
-                            raise "GCM auth error 401"
+                            throw "GCM auth error 401"
                         else if response.statusCode == 400
-                            raise "GCM bad request JSON error"
+                            throw "GCM bad request JSON error"
                         else if 500 <= response.statusCode <= 599
                             # GCM server error, retry later
                             # remove the message document before trying to push it again
@@ -277,7 +277,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                             try
                                 jsonObj = JSON.parse responseData
                             catch
-                                raise "GCM response JSON parse error"
+                                throw "GCM response JSON parse error"
                             
                             if jsonObj.failure > 0 or jsonObj.canonical_ids > 0
                                 # there were some problems
@@ -306,12 +306,12 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                         else if resObj.error == 'NotRegistered'
                                             Client.remove { clientId: msg.clientId }, (err) ->
                                                 console.log err if err
-                                            raise "GCM client not registered,
+                                            throw "GCM client not registered,
                                                    removing client from database"
                                         else
-                                            raise "GCM response error: #{ resObj.error }"
+                                            throw "GCM response error: #{ resObj.error }"
                         else
-                            raise "unknown GCM response status code: #{response.statusCode}"
+                            throw "unknown GCM response status code: #{response.statusCode}"
                     
                     catch errMsg
                         console.error "pushToClient: #{errMsg}"
