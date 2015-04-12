@@ -19,8 +19,6 @@ PUSH_URL_PATH = '/gcm/send'
 mongoose.connect 'mongodb://localhost/clients', (err) ->
     if err
         console.log 'ERROR in connecting to database: ' + err
-    #else
-    #    mongoose.connection.db.dropDatabase() # delete old values
 
 # Database schemas
 clientSchema = mongoose.Schema {
@@ -29,19 +27,6 @@ clientSchema = mongoose.Schema {
         required: true
         minLength: 1
     
-    # OLD style: these fields are supposed to be removed later. Keeping them until new version is polished.
-    # array of routes the client is interested in
-    helsinkiIntLines: [String] # Helsinki internal
-    espooIntLines: [String]
-    vantaaIntLines: [String]
-    regionalLines: [String]
-    trams: [String]
-    trains: [String] # commuter trains
-    ferries: [String] # usually only one line "lautta" (to Suomenlinna island)
-    Ulines: [String] # with or without U char in the line?
-    metro: [String]
-    
-    # NEW style
     # each section represents one vehicle in the complete route
     # (e.g, if the client must switch buses once in the route, there are two sections)
     sections: [{
@@ -54,10 +39,22 @@ clientSchema = mongoose.Schema {
         line:
             type: String
             required: true
-        category:  # similar to the categories as seen in the old fields above
+        category:
             type: String
             required: true
     }],
+    ###
+    Possible categories: 
+    "helsinkiInternal"  (these first four categories are for buses)
+    "espooInternal"
+    "vantaaInternal"
+    "regional"
+    "tram"     (trams always use this, trams exist only in Helsinki)
+    "train"     (all commuter trains use this)
+    "ferry" (I think there is only one ferry, to Suomenlinna island. The line may be called “lautta”)
+    "Uline" (these are some specific long-distance buses that do not use the same tickets as everything else)
+    "metro" (I don’t know if the metro has any names for lines)
+    ###
 }
 
 clientSchema.pre 'validate', (next) ->
@@ -141,7 +138,6 @@ SentMessageHash = mongoose.model 'SentMessageHash', sentMessageHashSchema
 dbAddTestValues = () -> 
     c1 = new Client
             clientId: 1
-            helsinkiIntLines: ['20', '14']
             sections: [{
                 startTime: new Date()
                 endTime: new Date(new Date().getTime() + 30*60000)
@@ -150,10 +146,8 @@ dbAddTestValues = () ->
             }]
     c2 = new Client
             clientId: 2
-            espooIntLines: ['11']
     c3 = new Client
             clientId: 3
-            trams: ['4']
     c1.save (err) -> console.log err if err
     #c2.save (err) -> console.log err if err
     #c3.save (err) -> console.log err if err
@@ -207,6 +201,8 @@ app.post '/unregisterclient', (req, res) ->
         res.status(400).end()
 
 # Push a message to the client.
+# Parameter msg is a plain JS object with keys:
+# clientId, message, lines, category, validThrough
 pushToClient = (msg) ->
     # Send HTTP POST request to the GCM push server that will then send it to the client
     # http://developer.android.com/google/gcm/server-ref.html
@@ -312,8 +308,6 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
                     message: message
                     lines: lines
                     category: areaField # TODO areaField is not very human-readable (should it be?)
-                    sentToClient: false
-                    clientHasRead: false
                     validThrough: disrEndTime
         return
 
