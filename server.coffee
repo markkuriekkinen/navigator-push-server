@@ -197,7 +197,7 @@ app.post '/registerclient', (req, res) ->
         res.status(400).end()
     
 # clients should be able to deregister from all push notifications
-app.post '/unregisterclient', (req, res) ->
+app.post '/deregisterclient', (req, res) ->
     # body should contain GCM registration_id, 
     if req.body.registration_id?
         # remove client from database
