@@ -7,8 +7,6 @@ http        = require 'http'
 https       = require 'https'
 crypto      = require 'crypto'
 
-# API key from Google (Don't save this in the public repo!)
-GCM_PUSH_API_KEY = require('./secret_keys').GCM_PUSH_API_KEY
 
 NEWS_URL = 'https://www.hsl.fi/en/newsApi/all'
 DISRUPTIONS_URL = 'http://www.poikkeusinfo.fi/xml/v2/en'
@@ -20,8 +18,37 @@ PUSH_URL_PATH = '/gcm/send'
 # time. Should be larger than maximum age of typical such message.
 DEFAULT_MSG_EXPIRATION = 1000*60*60*24*366
 
+# The interval in milliseconds for fetching updates from HSL servers.
+UPDATE_INTERVAL = process.env.UPDATE_INTERVAL ? 1000*60
 
-mongoose.connect 'mongodb://localhost/clients', (err) ->
+HTTP_PORT = process.env.HTTP_PORT ? 8080
+
+
+# API key from Google (Don't save this in the public repo!)
+GCM_PUSH_API_KEY =
+    process.env.GCM_PUSH_API_KEY ?
+    try
+        require('./secret_keys').GCM_PUSH_API_KEY
+    catch
+        console.error("""
+            Google Cloud Messaging API key not set. The key can be
+            given in the environment variable GCM_PUSH_API_KEY or in a
+            file named secret_keys.js as follows:
+
+                module.exports = { GCM_PUSH_API_KEY: "..." };
+
+            The file MUST NOT be stored in a public repository!
+            """)
+        process.exit 1
+
+MONGODB_URI =
+    process.env.MONGODB_URI ?   # user configured URI
+    process.env.MONGOLAB_URI ?  # MongoDB URI of MongoLab Heroku plugin
+    process.env.MONGOHQ_URI ?  # MongoDB URI of Compose MongoDB Heroku plugin
+    'mongodb://localhost/clients'
+
+
+mongoose.connect MONGODB_URI, (err) ->
     if err
         console.log 'ERROR in connecting to database: ' + err
 
@@ -462,9 +489,9 @@ setInterval( ->
                         parseDisruptionsResponse result
             
     requestDisr.end()
-, 3000)
+, UPDATE_INTERVAL)
 
-port = 8080
+port = HTTP_PORT
 console.log "Listening on port #{ port }"
 app.listen port
 
