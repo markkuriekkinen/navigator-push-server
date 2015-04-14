@@ -26,68 +26,47 @@ mongoose.connect 'mongodb://localhost/clients', (err) ->
         console.log 'ERROR in connecting to database: ' + err
 
 # Database schemas
-clientSchema = mongoose.Schema {
+subscriptionSchema = mongoose.Schema
     clientId:  # Google Cloud Messaging register_id for the client
         type: String
+        index: true
         required: true
         minLength: 1
     
-    # each section represents one vehicle in the complete route
-    # (e.g, if the client must switch buses once in the route, there are two sections)
-    sections: [{
-        startTime:
-            type: Date
-            required: true
-        endTime:
-            type: Date
-            required: true
-        line:
-            type: String
-            required: true
-        category:
-            type: String
-            required: true
-    }],
-    ###
-    Possible categories: 
-    "helsinkiInternal"  (these first four categories are for buses)
-    "espooInternal"
-    "vantaaInternal"
-    "regional"
-    "tram"     (trams always use this, trams exist only in Helsinki)
-    "train"     (all commuter trains use this)
-    "ferry" (I think there is only one ferry, to Suomenlinna island. The line may be called “lautta”)
-    "Uline" (these are some specific long-distance buses that do not use the same tickets as everything else)
-    "metro" (I don’t know if the metro has any names for lines)
-    ###
-}
+    category:
+        type: String
+        required: true
+    line:
+        type: String
+        required: true
+    startTime:
+        type: Date
+        required: true
+    endTime:
+        type: Date
+        expires: 60*30  # autoremove after this many seconds after endTime
+        required: true
 
-clientSchema.pre 'validate', (next) ->
-    unless @sections.length > 0
-        @invalidate "sections", "At least one section required", @sections
-        next()
-        return
-    
+subscriptionSchema.index
+    category: 1
+    line: 1
+    startTime: 1
+    endTime: 1
+
+subscriptionSchema.pre 'validate', (next) ->
     now = Date.now()
     min = now - 1000*60*60*24*2
     max = now + 1000*60*60*24*2
-    for sec, i in @sections
-        unless sec.startTime > min
-            @invalidate "sections.#{i}.startTime",
-                "startTime invalid or too far in the past",
-                sec.startTime
-        unless sec.endTime < max
-            @invalidate "sections.#{i}.endTime",
-                "endTime invalid or too far in the future",
-                sec.endTime
-        unless sec.startTime <= sec.endTime
-            @invalidate "sections.#{i}.startTime",
-                "startTime invalid or > endTime",
-                sec.startTime
-            @invalidate "sections.#{i}.endTime",
-                "endTime invalid or < startTime",
-                sec.endTime
+
+    unless @startTime > min
+        @invalidate "startTime", "startTime invalid or too far in the past", @startTime
+    unless @endTime < max
+        @invalidate "endTime", "endTime invalid or too far in the future", @endTime
+    unless @startTime <= @endTime
+        @invalidate "startTime", "startTime invalid or > endTime", @startTime
+        @invalidate "endTime", "endTime invalid or < startTime", @endTime
     next()
+
 
 sentMessageHashSchema = mongoose.Schema {
     _id:  # binary sha1 hash of client id and message data
@@ -142,29 +121,8 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
     )
     promise
 
-Client = mongoose.model 'Client', clientSchema
+Subscription = mongoose.model 'Subscription', subscriptionSchema
 SentMessageHash = mongoose.model 'SentMessageHash', sentMessageHashSchema
-
-# Database test data
-dbAddTestValues = () -> 
-    c1 = new Client
-            clientId: 1
-            sections: [{
-                startTime: new Date()
-                endTime: new Date(new Date().getTime() + 30*60000)
-                line: '14'
-                category: 'helsinkiInternal'
-            }]
-    c2 = new Client
-            clientId: 2
-    c3 = new Client
-            clientId: 3
-    c1.save (err) -> console.log err if err
-    #c2.save (err) -> console.log err if err
-    #c3.save (err) -> console.log err if err
-
-#dbAddTestValues()
-
 
 app.use bodyParser.json()
 app.use bodyParser.urlencoded(extended: true)  # extended allows nested objects
@@ -176,13 +134,20 @@ app.post '/registerclient', (req, res) ->
     console.log(req.body) # test print
     if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
         # remove possible old client route data
-        Client.remove(clientId: req.body.registration_id).exec()
+        promise = Subscription.remove(clientId: req.body.registration_id).exec()
+
+        # make subscription objects (concurrently with remove operation)
+        subscriptions =
+            for sec in req.body.sections
+                doc = { clientId: req.body.registration_id }
+                for k,v of sec
+                    doc[k] = v
+                doc
+
+        promise
             .then ->
-                # create a client in database
-                c = new Client
-                    clientId: req.body.registration_id
-                    sections: req.body.sections
-                c.save()
+                # create subscriptions in database
+                Subscription.create subscriptions
             .onFulfill ->
                 res.status(200).end()
             .onReject (err) ->
@@ -195,13 +160,13 @@ app.post '/registerclient', (req, res) ->
     else
         # request POST data is invalid
         res.status(400).end()
-    
+
 # clients should be able to deregister from all push notifications
 app.post '/deregisterclient', (req, res) ->
     # body should contain GCM registration_id, 
     if req.body.registration_id?
-        # remove client from database
-        Client.remove(clientId: req.body.registration_id).exec()
+        # remove client's subscriptions from database
+        Subscription.remove(clientId: req.body.registration_id).exec()
             .onFulfill ->
                 res.status(200).end()
             .onReject (err) ->
@@ -286,10 +251,9 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                         # must replace the client registration id with
                                         # the new resObj id (canonical id)
                                         # modify database
-                                        Client.update { clientId: msg.clientId },
+                                        Subscription.update { clientId: msg.clientId },
                                             { clientId: resObj.registration_id },
-                                            (err, numberAffected, rawResponse) ->
-                                                console.log err if err
+                                            (err) -> console.log err if err
                                         # no need to resend, GCM just informed us
                                         # that the registration id was changed
                                     else if resObj.error?
@@ -304,8 +268,8 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                                     retryTimeout
                                             scheduleMessagePush msg, timeout
                                         else if resObj.error == 'NotRegistered'
-                                            Client.remove { clientId: msg.clientId }, (err) ->
-                                                console.log err if err
+                                            Subscription.remove { clientId: msg.clientId },
+                                                (err) -> console.log err if err
                                             throw "GCM client not registered,
                                                    removing client from database"
                                         else
@@ -324,13 +288,13 @@ pushToClient = (msg, retryTimeout = 1000) ->
 
 # find clients that are using lines (given as array) in the area
 findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
-    createMessages = (err, clients) -> 
+    createMessages = (err, clientIds) -> 
         if err
             console.log err
         else
-            for client in clients # create messages to database to be sent to clients later
+            for id in clientIds # create messages to database to be sent to clients later
                 pushToClient
-                    clientId: client.clientId
+                    clientId: id
                     message: message
                     lines: lines
                     category: areaField # TODO areaField is not very human-readable (should it be?)
@@ -344,7 +308,7 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     criteria.startTime = { $lt: disrEndTime } if disrStartTime
     criteria.endTime = { $gt: disrStartTime } if disrEndTime
 
-    Client.where('sections').elemMatch(criteria).exec createMessages
+    Subscription.distinct 'clientId', criteria, createMessages
 
 # Set a message push to occur in millisecs time. The push message will be
 # sent to the GCM servers but it is still up to them to decide when
