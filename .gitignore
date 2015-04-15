@@ -1,4 +1,7 @@
 node_modules
 *~
-server.js
+http-server.js
+message-sender.js
+db.js
+start-both.js
 secret_keys.js
