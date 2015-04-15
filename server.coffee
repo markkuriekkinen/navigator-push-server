@@ -50,7 +50,7 @@ MONGODB_URI =
 
 mongoose.connect MONGODB_URI, (err) ->
     if err
-        console.log 'ERROR in connecting to database: ' + err
+        console.error 'ERROR in connecting to database: ' + err
 
 # Database schemas
 subscriptionSchema = mongoose.Schema
@@ -158,7 +158,6 @@ app.use bodyParser.urlencoded(extended: true)  # extended allows nested objects
 # clients send HTTP POST to this URL in order to register for push notifications
 app.post '/registerclient', (req, res) ->
     # client info in JSON: push client id, routes (lines)
-    console.log(req.body) # test print
     if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
         # remove possible old client route data
         promise = Subscription.remove(clientId: req.body.registration_id).exec()
@@ -230,14 +229,12 @@ pushToClient = (msg, retryTimeout = 1000) ->
             postData =
                 registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
                 time_to_live: timeToLive
-                dry_run: true # TESTING, no message sent to client device, TODO turn off
+                #dry_run: true # TESTING, no message sent to client device, TODO turn off
                 data: # payload to client, data values should be strings
                     disruption_message: msg.message
                     disruption_lines: msg.lines.join() # array to comma-separated string
                     disruption_category: msg.category
             
-            # console.log require('util').inspect(postData)
-            # return
             request = https.request options, (response) ->
                 # response from GCM push server
                 response.setEncoding 'utf8'
@@ -247,7 +244,6 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     responseData += chunk
                     
                 response.on 'end', ->
-                    console.log responseData # TODO test
                     try
                         if response.statusCode == 401
                             throw "GCM auth error 401"
@@ -256,7 +252,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                         else if 500 <= response.statusCode <= 599
                             # GCM server error, retry later
                             # remove the message document before trying to push it again
-                            msgHashDoc.remove (err) -> console.log err if err
+                            msgHashDoc.remove (err) -> console.error err if err
                             timeout =
                                 if 'retry-after' of response.headers
                                     parseHttpRetryAfter response.headers['retry-after']
@@ -280,14 +276,14 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                         # modify database
                                         Subscription.update { clientId: msg.clientId },
                                             { clientId: resObj.registration_id },
-                                            (err) -> console.log err if err
+                                            (err) -> console.error err if err
                                         # no need to resend, GCM just informed us
                                         # that the registration id was changed
                                     else if resObj.error?
                                         if resObj.error == 'Unavailable'
                                             # GCM server unavailable, retry
                                             # remove the message document before trying to push it again
-                                            msgHashDoc.remove (err) -> console.log err if err
+                                            msgHashDoc.remove (err) -> console.error err if err
                                             timeout =
                                                 if 'retry-after' of response.headers
                                                     parseHttpRetryAfter response.headers['retry-after']
@@ -296,7 +292,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                             scheduleMessagePush msg, timeout
                                         else if resObj.error == 'NotRegistered'
                                             Subscription.remove { clientId: msg.clientId },
-                                                (err) -> console.log err if err
+                                                (err) -> console.error err if err
                                             throw "GCM client not registered,
                                                    removing client from database"
                                         else
@@ -306,7 +302,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     
                     catch errMsg
                         console.error "pushToClient: #{errMsg}"
-                        msgHashDoc.remove (err) -> console.log err if err
+                        msgHashDoc.remove (err) -> console.error err if err
                     return
             
             # write data to request body
@@ -317,7 +313,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
 findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     createMessages = (err, clientIds) -> 
         if err
-            console.log err
+            console.error err
         else
             for id in clientIds # create messages to database to be sent to clients later
                 pushToClient
@@ -482,7 +478,7 @@ setInterval( ->
         response.on 'end', ->
             xml2js.parseString responseData, (err, result) ->
                 if err
-                    console.log "Error in parsing XML response from #{ DISRUPTIONS_URL }: " + err
+                    console.error "Error in parsing XML response from #{ DISRUPTIONS_URL }: " + err
                 else
                     if not result.DISRUPTIONS.INFO?
                         # disruptions exist
