@@ -8,7 +8,7 @@ xml2js      = require 'xml2js'
 {dbConnect, Subscription, ValidationError} = require './db'
 
 
-HTTP_PORT = process.env.HTTP_PORT ? 8080
+HTTP_PORT = process.env.HTTP_PORT ? process.env.PORT ? 8080
 
 
 app.use bodyParser.json()
