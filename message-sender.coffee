@@ -321,6 +321,7 @@ update = ->
 
 
 start = ->
+    process.nextTick update
     setInterval update, UPDATE_INTERVAL
 
 module.exports =
