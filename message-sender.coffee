@@ -39,12 +39,14 @@ GCM_PUSH_API_KEY =
 # Parameter msg is a plain JS object with keys:
 # clientId, message, lines, category, validThrough
 pushToClient = (msg, retryTimeout = 1000) ->
-    # Send HTTP POST request to the GCM push server that will then send it to the client
-    # http://developer.android.com/google/gcm/server-ref.html
     SentMessageHash.storeHash msg, (err, msgHashDoc) ->
         if err
             console.error err
         else if msgHashDoc?  # if null, the message has already been sent
+            
+            # Send HTTP POST request to the GCM push server that will
+            # then send it to the client
+            # http://developer.android.com/google/gcm/server-ref.html
             options =
                 hostname: PUSH_HOST
                 path: PUSH_URL_PATH
@@ -137,6 +139,10 @@ pushToClient = (msg, retryTimeout = 1000) ->
                         console.error "pushToClient: #{errMsg}"
                         msgHashDoc.remove (err) -> console.error err if err
                     return
+                
+                response.on 'error', (err) -> console.error "pushToClient: #{err}"
+            
+            request.on 'error', (err) -> console.error "pushToClient: #{err}"
             
             # write data to request body
             request.write JSON.stringify postData
@@ -148,7 +154,7 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
         if err
             console.error err
         else
-            for id in clientIds # create messages to database to be sent to clients later
+            for id in clientIds
                 pushToClient
                     clientId: id
                     message: message
@@ -284,6 +290,8 @@ parseDisruptionsResponse = (disrObj) ->
 
 
 update = ->
+    console.log "Fetching news and disruptions updates"
+    
     request = https.request NEWS_URL, (response) ->
         # response from HSL server
         response.setEncoding 'utf8'
@@ -297,9 +305,12 @@ update = ->
             # with key node, and that is an object with keys title, body, Lines, Main category
             jsonObj = JSON.parse responseData
             parseNewsResponse jsonObj
-            
+        
+        response.on 'error', (err) -> console.error err
     
+    request.on 'error', (err) -> console.error err
     request.end()
+    
     requestDisr = http.request DISRUPTIONS_URL, (response) ->
         # response from HSL server
         response.setEncoding 'utf8' # 'ISO-8859-1' not supported
@@ -316,11 +327,16 @@ update = ->
                     if not result.DISRUPTIONS.INFO?
                         # disruptions exist
                         parseDisruptionsResponse result
-            
+        
+        response.on 'error', (err) -> console.error err
+    
+    requestDisr.on 'error', (err) -> console.error err
     requestDisr.end()
 
 
 start = ->
+    console.log "Starting update fetcher, update interval #{ UPDATE_INTERVAL / 1000 }s"
+    process.nextTick update
     setInterval update, UPDATE_INTERVAL
 
 module.exports =
