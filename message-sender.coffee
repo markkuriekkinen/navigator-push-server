@@ -42,7 +42,9 @@ pushToClient = (msg, retryTimeout = 1000) ->
     SentMessageHash.storeHash msg, (err, msgHashDoc) ->
         if err
             console.error err
-        else if msgHashDoc?  # if null, the message has already been sent
+        else if not msgHashDoc?  # if null, the message has already been sent
+            console.log "GCM request already sent, skipping: %j", msg
+        else
             
             # Send HTTP POST request to the GCM push server that will
             # then send it to the client
@@ -69,6 +71,8 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     disruption_message: msg.message
                     disruption_lines: msg.lines.join() # array to comma-separated string
                     disruption_category: msg.category
+            
+            console.log "sending GCM request: %j", postData
             
             request = https.request options, (response) ->
                 # response from GCM push server
