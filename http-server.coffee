@@ -17,6 +17,8 @@ app.use bodyParser.urlencoded(extended: true)  # extended allows nested objects
 
 # clients send HTTP POST to this URL in order to register for push notifications
 app.post '/registerclient', (req, res) ->
+    console.log "registerclient from #{ req.ip }: %j", req.body
+
     # client info in JSON: push client id, routes (lines)
     if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
         # remove possible old client route data
@@ -25,10 +27,11 @@ app.post '/registerclient', (req, res) ->
         # make subscription objects (concurrently with remove operation)
         subscriptions =
             for sec in req.body.sections
-                doc = { clientId: req.body.registration_id }
-                for k,v of sec
-                    doc[k] = v
-                doc
+                clientId: req.body.registration_id
+                category:  sec.category
+                line:      sec.line
+                startTime: sec.startTime
+                endTime:   sec.endTime
 
         promise
             .then ->
@@ -40,15 +43,19 @@ app.post '/registerclient', (req, res) ->
                 if err instanceof ValidationError
                     # request POST data failed validation
                     res.status(400).end()
+                    console.warn "POST data failed validation:", err
                 else
                     console.error err
                     res.status(500).end()
     else
         # request POST data is invalid
         res.status(400).end()
+        console.warn "invalid POST data"
 
 # clients should be able to deregister from all push notifications
 app.post '/deregisterclient', (req, res) ->
+    console.log "deregisterclient from #{ req.ip }: %j", req.body
+
     # body should contain GCM registration_id, 
     if req.body.registration_id?
         # remove client's subscriptions from database
@@ -61,6 +68,7 @@ app.post '/deregisterclient', (req, res) ->
     else
         # request POST data is invalid
         res.status(400).end()
+        console.warn "invalid POST data"
 
 
 start = ->
