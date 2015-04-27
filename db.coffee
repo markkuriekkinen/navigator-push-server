@@ -75,6 +75,13 @@ sentMessageHashSchema = mongoose.Schema {
         # delete after this many seconds after expirationTime (should
         # be >0 to guard against clock skew and other weirdness)
         expires: 60*60*24
+    clientId:  # Google Cloud Messaging register_id for the client
+        # clientId is needed so that old sent messages can be removed when
+        # the client registers again
+        type: String
+        index: true
+        required: true
+        minLength: 1
 }
 
 # Calculate message hash and store it in the database. Return
@@ -103,6 +110,7 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
             _id: hash
             expirationTime:
                 message.validThrough ? (Date.now() + DEFAULT_MSG_EXPIRATION)
+            clientId: message.clientId
         },
         (err, hashDoc) ->
             if err

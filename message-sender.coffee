@@ -66,7 +66,6 @@ pushToClient = (msg, retryTimeout = 1000) ->
             postData =
                 registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
                 time_to_live: timeToLive
-                #dry_run: true # TESTING, no message sent to client device, TODO turn off
                 data: # payload to client, data values should be strings
                     disruption_message: msg.message
                     disruption_lines: msg.lines.join() # array to comma-separated string
@@ -163,7 +162,7 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
                     clientId: id
                     message: message
                     lines: lines
-                    category: areaField # TODO areaField is not very human-readable (should it be?)
+                    category: areaField
                     validThrough: disrEndTime
         return
 
