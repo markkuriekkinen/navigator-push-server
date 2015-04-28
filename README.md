@@ -45,6 +45,25 @@ above.
    milliseconds for fetching updates from HSL servers.
 *  `GCM_PUSH_API_KEY` (message sender only, required): Google Cloud
    Messaging API key.
+*  `TEST_PUSH`: if set to anything except `false`, `no`, `off`, or
+   `0`, enable sending test messages. See below.
+
+## Sending test messages
+
+The HTTP server has a test message sending functionality, which can
+be enabled by setting the environment variable `TEST_PUSH` to anything
+except `false`, `no`, `off`, or `0`. To send a test message, send a
+HTTP POST request to the path `/send-test-message` with the following
+fields in the body as either form data or JSON:
+
+*  `msg`: message
+*  `category` (optional): category of the lines in text form
+*  `lines` (optional): lines (in JSON as array; in form data in the
+   form `lines[]=11&lines[]=22&...`)
+
+Note that duplicate message detection works as with normal messages:
+Messages identical to any previously sent message are not sent to
+clients that have already received the message.
 
 
 # Heroku deployment

@@ -166,8 +166,8 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
                     validThrough: disrEndTime
         return
 
-    criteria = 
-        'category': areaField
+    criteria = {}
+    criteria.category = areaField if areaField != 'all'
     # if lines[0] == 'all', find clients that are using any line in the area
     criteria.line = { $in: lines } if lines[0] != 'all' # add lines criteria if searching only for specific lines
     criteria.startTime = { $lt: disrEndTime } if disrStartTime
@@ -339,6 +339,13 @@ update = ->
     requestDisr.end()
 
 
+# Send a test message to all registered clients. Note that messages
+# identical to any previously sent message are not sent to clients
+# that have already received the message.
+sendTestMessage = (message, lines, category) ->
+    findClients lines ? ['all'], category ? 'all', message
+
+
 start = ->
     console.log "Starting update fetcher, update interval #{ UPDATE_INTERVAL / 1000 }s"
     process.nextTick update
@@ -346,6 +353,7 @@ start = ->
 
 module.exports =
     start: start
+    sendTestMessage: sendTestMessage
 
 if require.main == module
     dbConnect()

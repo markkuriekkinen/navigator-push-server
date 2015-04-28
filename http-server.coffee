@@ -79,6 +79,21 @@ app.post '/deregisterclient', (req, res) ->
         console.warn "invalid POST data"
 
 
+# if enabled, send test message to registered clients
+if process.env.TEST_PUSH?.toLowerCase() not in [undefined, 'false', 'no', 'off', '0']
+    {sendTestMessage} = require './message-sender'
+    
+    console.log "/send-test-message enabled"
+    
+    app.post '/send-test-message', (req, res) ->
+        if req.body?.msg?
+            sendTestMessage req.body.msg, req.body.lines, req.body.category
+            res.status(200).end()
+        else
+            res.set 'Content-Type', 'text/plain'
+            res.status(400).send('Error: msg field not in request body')
+
+
 start = ->
     console.log "Listening on port #{ HTTP_PORT }"
     app.listen HTTP_PORT
