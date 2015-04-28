@@ -66,7 +66,6 @@ pushToClient = (msg, retryTimeout = 1000) ->
             postData =
                 registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
                 time_to_live: timeToLive
-                #dry_run: true # TESTING, no message sent to client device, TODO turn off
                 data: # payload to client, data values should be strings
                     disruption_message: msg.message
                     disruption_lines: msg.lines.join() # array to comma-separated string
@@ -163,12 +162,12 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
                     clientId: id
                     message: message
                     lines: lines
-                    category: areaField # TODO areaField is not very human-readable (should it be?)
+                    category: areaField
                     validThrough: disrEndTime
         return
 
-    criteria = 
-        'category': areaField
+    criteria = {}
+    criteria.category = areaField if areaField != 'all'
     # if lines[0] == 'all', find clients that are using any line in the area
     criteria.line = { $in: lines } if lines[0] != 'all' # add lines criteria if searching only for specific lines
     criteria.startTime = { $lt: disrEndTime } if disrStartTime
@@ -263,8 +262,10 @@ parseDisruptionsResponse = (disrObj) ->
                 for dkey, dval of disrObj
                     if dkey == 'VALIDITY'
                         isValid = true if dval[0]['$'].status == '1'
-                        disrStartTime = new Date(dval[0]['$'].from)
-                        disrEndTime = new Date(dval[0]['$'].to)
+                        # the HSL poikkeusinfo server does not have timezones in the date values,
+                        # so we manually set the Finnish timezone here
+                        disrStartTime = new Date(dval[0]['$'].from + '+03:00')
+                        disrEndTime = new Date(dval[0]['$'].to + '+03:00')
                     else if dkey == 'INFO'
                         # human-readable description
                         message = dval[0]['TEXT'][0]['_'].trim()
@@ -338,6 +339,13 @@ update = ->
     requestDisr.end()
 
 
+# Send a test message to all registered clients. Note that messages
+# identical to any previously sent message are not sent to clients
+# that have already received the message.
+sendTestMessage = (message, lines, category) ->
+    findClients lines ? ['all'], category ? 'all', message
+
+
 start = ->
     console.log "Starting update fetcher, update interval #{ UPDATE_INTERVAL / 1000 }s"
     process.nextTick update
@@ -345,6 +353,7 @@ start = ->
 
 module.exports =
     start: start
+    sendTestMessage: sendTestMessage
 
 if require.main == module
     dbConnect()

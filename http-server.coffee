@@ -5,7 +5,7 @@ app         = express()
 bodyParser  = require 'body-parser'
 xml2js      = require 'xml2js'
 
-{dbConnect, Subscription, ValidationError} = require './db'
+{dbConnect, Subscription, SentMessageHash, ValidationError} = require './db'
 
 
 HTTP_PORT = process.env.HTTP_PORT ? process.env.PORT ? 8080
@@ -23,6 +23,10 @@ app.post '/registerclient', (req, res) ->
     if req.body.registration_id? and req.body.sections? and Array.isArray(req.body.sections)
         # remove possible old client route data
         promise = Subscription.remove(clientId: req.body.registration_id).exec()
+        # remove also old sent messages, which means that the messages
+        # can be sent again to the client if it registers again
+        SentMessageHash.remove(clientId: req.body.registration_id).exec (err) ->
+            console.error err if err
 
         # make subscription objects (concurrently with remove operation)
         subscriptions =
@@ -61,6 +65,10 @@ app.post '/deregisterclient', (req, res) ->
         # remove client's subscriptions from database
         Subscription.remove(clientId: req.body.registration_id).exec()
             .onFulfill ->
+                # remove also old sent messages, which means that the messages
+                # can be sent again to the client if it registers again
+                SentMessageHash.remove(clientId: req.body.registration_id).exec (err) ->
+                    console.error err if err
                 res.status(200).end()
             .onReject (err) ->
                 console.error err
@@ -69,6 +77,21 @@ app.post '/deregisterclient', (req, res) ->
         # request POST data is invalid
         res.status(400).end()
         console.warn "invalid POST data"
+
+
+# if enabled, send test message to registered clients
+if process.env.TEST_PUSH?.toLowerCase() not in [undefined, 'false', 'no', 'off', '0']
+    {sendTestMessage} = require './message-sender'
+    
+    console.log "/send-test-message enabled"
+    
+    app.post '/send-test-message', (req, res) ->
+        if req.body?.msg?
+            sendTestMessage req.body.msg, req.body.lines, req.body.category
+            res.status(200).end()
+        else
+            res.set 'Content-Type', 'text/plain'
+            res.status(400).send('Error: msg field not in request body')
 
 
 start = ->
