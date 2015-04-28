@@ -262,8 +262,10 @@ parseDisruptionsResponse = (disrObj) ->
                 for dkey, dval of disrObj
                     if dkey == 'VALIDITY'
                         isValid = true if dval[0]['$'].status == '1'
-                        disrStartTime = new Date(dval[0]['$'].from)
-                        disrEndTime = new Date(dval[0]['$'].to)
+                        # the HSL poikkeusinfo server does not have timezones in the date values,
+                        # so we manually set the Finnish timezone here
+                        disrStartTime = new Date(dval[0]['$'].from + '+03:00')
+                        disrEndTime = new Date(dval[0]['$'].to + '+03:00')
                     else if dkey == 'INFO'
                         # human-readable description
                         message = dval[0]['TEXT'][0]['_'].trim()
