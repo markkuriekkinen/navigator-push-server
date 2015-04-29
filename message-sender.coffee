@@ -57,10 +57,11 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     'Authorization': "key=#{ GCM_PUSH_API_KEY }"
                     'Content-Type': 'application/json'
             
+            timeTillEnd = (msg.validThrough.getTime() - new Date().getTime()) / 1000
             timeToLive =
-                if msg.validThrough?
+                if msg.validThrough? and timeTillEnd > 0
                     # set time_to_live till the end of the journey in seconds
-                    (msg.validThrough.getTime() - new Date().getTime()) / 1000
+                    timeTillEnd
                 else
                     60 * 60 * 24 # 24 h
             postData =
@@ -90,13 +91,14 @@ pushToClient = (msg, retryTimeout = 1000) ->
                         else if 500 <= response.statusCode <= 599
                             # GCM server error, retry later
                             # remove the message document before trying to push it again
-                            msgHashDoc.remove (err) -> console.error err if err
-                            timeout =
-                                if 'retry-after' of response.headers
-                                    parseHttpRetryAfter response.headers['retry-after']
-                                else
-                                    retryTimeout
-                            scheduleMessagePush msg, timeout
+                            msgHashDoc.remove (err) ->
+                                console.error err if err
+                                timeout =
+                                    if 'retry-after' of response.headers
+                                        parseHttpRetryAfter response.headers['retry-after']
+                                    else
+                                        retryTimeout
+                                scheduleMessagePush msg, timeout
                         else if response.statusCode == 200
                             # success, but nonetheless there may be
                             # errors in delivering messages to clients
@@ -121,13 +123,14 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                         if resObj.error == 'Unavailable'
                                             # GCM server unavailable, retry
                                             # remove the message document before trying to push it again
-                                            msgHashDoc.remove (err) -> console.error err if err
-                                            timeout =
-                                                if 'retry-after' of response.headers
-                                                    parseHttpRetryAfter response.headers['retry-after']
-                                                else
-                                                    retryTimeout
-                                            scheduleMessagePush msg, timeout
+                                            msgHashDoc.remove (err) ->
+                                                console.error err if err
+                                                timeout =
+                                                    if 'retry-after' of response.headers
+                                                        parseHttpRetryAfter response.headers['retry-after']
+                                                    else
+                                                        retryTimeout
+                                                scheduleMessagePush msg, timeout
                                         else if resObj.error == 'NotRegistered'
                                             Subscription.remove { clientId: msg.clientId },
                                                 (err) -> console.error err if err
@@ -190,10 +193,27 @@ parseHttpRetryAfter = (retryAfterValue) ->
     if isNaN retryAfterValue
         # header contains a date string,
         # get time in milliseconds from this moment to that moment
-        new Date(retryAfterValue).getTime() - new Date().getTime()
+        timeout = new Date(retryAfterValue).getTime() - new Date().getTime()
+        if timeout > 0
+            timeout
+        else
+            5000 # arbitrary default if retry-after header date is in the past
     else
         # header is integer in seconds
         1000 * parseInt retryAfterValue, 10
+
+# Return true if daylight saving is currently in use.
+isDstOn = () ->
+    # Modified from http://javascript.about.com/library/bldst.htm
+    dateStdTimezoneOffset = (date) ->
+        jan = new Date date.getFullYear(), 0, 1
+        jul = new Date date.getFullYear(), 6, 1
+        Math.max jan.getTimezoneOffset(), jul.getTimezoneOffset()
+    
+    dateDst = (date) ->
+        date.getTimezoneOffset() < dateStdTimezoneOffset(date)
+
+    dateDst new Date()
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
@@ -264,8 +284,13 @@ parseDisruptionsResponse = (disrObj) ->
                         isValid = true if dval[0]['$'].status == '1'
                         # the HSL poikkeusinfo server does not have timezones in the date values,
                         # so we manually set the Finnish timezone here
-                        disrStartTime = new Date(dval[0]['$'].from + '+03:00')
-                        disrEndTime = new Date(dval[0]['$'].to + '+03:00')
+                        timezone =
+                            if isDstOn()
+                                '+03:00'
+                            else
+                                '+02:00'
+                        disrStartTime = new Date(dval[0]['$'].from + timezone)
+                        disrEndTime = new Date(dval[0]['$'].to + timezone)
                     else if dkey == 'INFO'
                         # human-readable description
                         message = dval[0]['TEXT'][0]['_'].trim()
