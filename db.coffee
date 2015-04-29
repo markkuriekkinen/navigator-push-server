@@ -31,13 +31,13 @@ subscriptionSchema = mongoose.Schema
         required: true
         minLength: 1
     
-    category:
+    category: # category is the region/linetype of the line
         type: String
         required: true
     line:
         type: String
         required: true
-    startTime:
+    startTime: # when the client starts using the line
         type: Date
         required: true
     endTime:
