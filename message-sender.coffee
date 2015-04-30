@@ -73,7 +73,8 @@ pushToClient = (msg, retryTimeout = 1000) ->
                 registration_ids: [msg.clientId] # The clientId is used by GCM to identify the client device.
                 time_to_live: timeToLive
                 data: # payload to client, data values should be strings
-                    disruption_message: msg.message
+                    title: "Traffic disruption"
+                    message: msg.message
                     disruption_lines: msg.lines.join() # array to comma-separated string
                     disruption_category: msg.category
             
