@@ -35,10 +35,11 @@ GCM_PUSH_API_KEY =
         process.exit 1
 
 
-# Push a message to the client.
+# Push a message to the client using Google Cloud Messaging (GCM).
 # Parameter msg is a plain JS object with keys:
 # clientId, message, lines, category, validThrough
 pushToClient = (msg, retryTimeout = 1000) ->
+    # The message is only pushed to the client if it has not been yet pushed earlier
     SentMessageHash.storeHash msg, (err, msgHashDoc) ->
         if err
             console.error err
@@ -57,10 +58,15 @@ pushToClient = (msg, retryTimeout = 1000) ->
                     'Authorization': "key=#{ GCM_PUSH_API_KEY }"
                     'Content-Type': 'application/json'
             
-            timeToLive =
+            timeTillEnd =
                 if msg.validThrough?
-                    # set time_to_live till the end of the journey in seconds
                     (msg.validThrough.getTime() - new Date().getTime()) / 1000
+                else
+                    0
+            timeToLive =
+                if timeTillEnd > 0
+                    # set time_to_live till the end of the journey in seconds
+                    timeTillEnd
                 else
                     60 * 60 * 24 # 24 h
             postData =
@@ -90,13 +96,14 @@ pushToClient = (msg, retryTimeout = 1000) ->
                         else if 500 <= response.statusCode <= 599
                             # GCM server error, retry later
                             # remove the message document before trying to push it again
-                            msgHashDoc.remove (err) -> console.error err if err
-                            timeout =
-                                if 'retry-after' of response.headers
-                                    parseHttpRetryAfter response.headers['retry-after']
-                                else
-                                    retryTimeout
-                            scheduleMessagePush msg, timeout
+                            msgHashDoc.remove (err) ->
+                                console.error err if err
+                                timeout =
+                                    if 'retry-after' of response.headers
+                                        parseHttpRetryAfter response.headers['retry-after']
+                                    else
+                                        retryTimeout
+                                scheduleMessagePush msg, timeout
                         else if response.statusCode == 200
                             # success, but nonetheless there may be
                             # errors in delivering messages to clients
@@ -121,13 +128,14 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                         if resObj.error == 'Unavailable'
                                             # GCM server unavailable, retry
                                             # remove the message document before trying to push it again
-                                            msgHashDoc.remove (err) -> console.error err if err
-                                            timeout =
-                                                if 'retry-after' of response.headers
-                                                    parseHttpRetryAfter response.headers['retry-after']
-                                                else
-                                                    retryTimeout
-                                            scheduleMessagePush msg, timeout
+                                            msgHashDoc.remove (err) ->
+                                                console.error err if err
+                                                timeout =
+                                                    if 'retry-after' of response.headers
+                                                        parseHttpRetryAfter response.headers['retry-after']
+                                                    else
+                                                        retryTimeout
+                                                scheduleMessagePush msg, timeout
                                         else if resObj.error == 'NotRegistered'
                                             Subscription.remove { clientId: msg.clientId },
                                                 (err) -> console.error err if err
@@ -151,7 +159,8 @@ pushToClient = (msg, retryTimeout = 1000) ->
             request.write JSON.stringify postData
             request.end()
 
-# find clients that are using lines (given as array) in the area
+# Find clients that are using lines (given as array) in the area.
+# Push notification messages to the affected clients.
 findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     createMessages = (err, clientIds) -> 
         if err
@@ -160,7 +169,7 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
             for id in clientIds
                 pushToClient
                     clientId: id
-                    message: message
+                    message: message # human-readable text
                     lines: lines
                     category: areaField
                     validThrough: disrEndTime
@@ -170,8 +179,8 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
     criteria.category = areaField if areaField != 'all'
     # if lines[0] == 'all', find clients that are using any line in the area
     criteria.line = { $in: lines } if lines[0] != 'all' # add lines criteria if searching only for specific lines
-    criteria.startTime = { $lt: disrEndTime } if disrStartTime
-    criteria.endTime = { $gt: disrStartTime } if disrEndTime
+    criteria.startTime = { $lt: disrEndTime } if disrEndTime
+    criteria.endTime = { $gt: disrStartTime } if disrStartTime
 
     Subscription.distinct 'clientId', criteria, createMessages
 
@@ -190,10 +199,41 @@ parseHttpRetryAfter = (retryAfterValue) ->
     if isNaN retryAfterValue
         # header contains a date string,
         # get time in milliseconds from this moment to that moment
-        new Date(retryAfterValue).getTime() - new Date().getTime()
+        timeout = new Date(retryAfterValue).getTime() - new Date().getTime()
+        if timeout > 0
+            timeout
+        else
+            5000 # arbitrary default if retry-after header date is in the past
     else
         # header is integer in seconds
         1000 * parseInt retryAfterValue, 10
+
+# Return true if daylight saving is currently in use.
+isDstOn = () ->
+    # Modified from http://javascript.about.com/library/bldst.htm
+    dateStdTimezoneOffset = (date) ->
+        jan = new Date date.getFullYear(), 0, 1
+        jul = new Date date.getFullYear(), 6, 1
+        Math.max jan.getTimezoneOffset(), jul.getTimezoneOffset()
+    
+    dateDst = (date) ->
+        date.getTimezoneOffset() < dateStdTimezoneOffset(date)
+
+    dateDst new Date()
+
+# mapping from HSL news API Main category values to the categories we use here
+NEWS_API_CATEGORIES =
+    'Helsinki internal bus': 'helsinkiInternal'
+    'Espoo internal bus':    'espooInternal'
+    'Vantaa internal bus':   'vantaaInternal'
+    'Regional':              'regional'
+    'Regional night line':   'regional'
+    'Tram':                  'tram'
+    'Commuter train':        'train'
+    'Ferry':                 'ferry'
+    'U line':                'Uline'
+    'Sipoo internal line':   'sipooInternal'
+    'Kerava internal bus':   'keravaInternal'
 
 # newsObj is the JS object parsed from the HSL news response
 parseNewsResponse = (newsObj) -> 
@@ -202,27 +242,13 @@ parseNewsResponse = (newsObj) ->
         lines = node.Lines.split ','
         cat = node['Main category']
         # the news do not contain easily parsable dates for the validity period
-        if cat == 'Helsinki internal bus'
-            findClients lines, 'helsinkiInternal', node.title
-        else if cat == 'Espoo internal bus'
-            findClients lines, 'espooInternal', node.title
-        else if cat == 'Vantaa internal bus'
-            findClients lines, 'vantaaInternal', node.title
-        else if cat.lastIndexOf('Regional', 0) == 0 # cat.startsWith("Regional")
-            findClients lines, 'regional', node.title
-        else if cat == 'Tram'
-            findClients lines, 'tram', node.title
-        else if cat == 'Commuter train'
-            findClients lines, 'train', node.title
-        else if cat == 'Ferry'
-            findClients lines, 'ferry', node.title
-        else if cat == 'U line'
-            findClients lines, 'Uline', node.title
+        if cat of NEWS_API_CATEGORIES
+            findClients lines, NEWS_API_CATEGORIES[cat], node.title
         else
             console.log "parseNewsResponse: unknown Main category: #{ cat }"
-            # Sipoo internal line
     return
-        
+
+# mapping from poikkeusinfo linetypes to the categories we use here
 DISRUPTION_API_LINETYPES = 
     '1': 'helsinkiInternal'
     '2': 'tram'
@@ -231,16 +257,18 @@ DISRUPTION_API_LINETYPES =
     '5': 'regional'
     '6': 'metro'
     '7': 'ferry'
-    '12': 'train'
-    #'14': 'all'
+    '12': 'train' # commuter trains
+    #'14': 'all' # handled separately
+    '36': 'kirkkonummiInternal'
+    '39': 'keravaInternal'
 
+# Parse XML response from poikkeusinfo server.
+# Parameter disrObj is a JS object parsed from XML.
 parseDisruptionsResponse = (disrObj) ->
     # HSL API description in Finnish (no pdf in English)
     # http://developer.reittiopas.fi/media/Poikkeusinfo_XML_rajapinta_V2_2_01.pdf
     for key, value of disrObj.DISRUPTIONS
-        if key == '$' # XML attributes for root element DISRUPTIONS
-        
-        else if key == 'DISRUPTION'
+        if key == 'DISRUPTION'
             for disrObj in value
                 # disrObj is one disruption message (one DISRUPTION element from the original XML)
                 isValid = false
@@ -258,42 +286,61 @@ parseDisruptionsResponse = (disrObj) ->
                     ferry: []
                     Uline: []
                     metro: []
+                    kirkkonummiInternal: []
+                    keravaInternal: []
                 }
                 for dkey, dval of disrObj
                     if dkey == 'VALIDITY'
+                        # the message may be active or cancelled
                         isValid = true if dval[0]['$'].status == '1'
                         # the HSL poikkeusinfo server does not have timezones in the date values,
                         # so we manually set the Finnish timezone here
-                        disrStartTime = new Date(dval[0]['$'].from + '+03:00')
-                        disrEndTime = new Date(dval[0]['$'].to + '+03:00')
+                        timezone =
+                            if isDstOn()
+                                '+03:00'
+                            else
+                                '+02:00'
+                        disrStartTime = new Date(dval[0]['$'].from + timezone)
+                        disrEndTime = new Date(dval[0]['$'].to + timezone)
                     else if dkey == 'INFO'
                         # human-readable description
-                        message = dval[0]['TEXT'][0]['_'].trim()
+                        englishElemIdx = 0
+                        for textElem, elemIdx in dval[0]['TEXT']
+                            # language attributes fi, se, en
+                            englishElemIdx = elemIdx if textElem['$'].lang == 'en'
+                        message = dval[0]['TEXT'][englishElemIdx]['_'].trim()
+                        # key '_' means the XML element content (normal text)
                     else if dkey == 'TARGETS'
                         targets = dval[0] # only one TARGETS element
+                        # TARGETS contains either a LINETYPE or 1-N LINE elements
                         if targets.LINETYPE?
                             # all lines within the area/scope/type affected
+                            # assume there is only one LINETYPE element
+                            # linetype numeric id that maps to regions/categories
                             linetype = targets.LINETYPE[0]['$'].id
                             if linetype of DISRUPTION_API_LINETYPES
                                 linesByArea[DISRUPTION_API_LINETYPES[linetype]].push 'all'
-                            #else if linetype == '14' # all areas
-                            
+                            else if linetype == '14' # all areas
+                                for area, lines of linesByArea
+                                    lines.push 'all'
                         else if targets.LINE?
                             # list of line elements that specify single affected lines
                             # parsed XML: $ for attributes, _ for textual element content
                             for lineElem in targets.LINE
                                 if lineElem['$'].linetype of DISRUPTION_API_LINETYPES
                                     linesByArea[DISRUPTION_API_LINETYPES[lineElem['$'].linetype]].push lineElem['_']
-                                #else if lineElem['$'].linetype == '14' # all areas
-                                
-                    #else if dkey == '$' # xml attributes
-                    
+                                else if lineElem['$'].linetype == '14' # all areas
+                                    for area, lines of linesByArea
+                                        lines.push lineElem['_']
                 if isValid
                     for area, lines of linesByArea
                         findClients lines, area, message, disrStartTime, disrEndTime if lines.length > 0
     return
 
 
+# Function that fetches disruption news updates from HSL servers, parses them
+# and searches the database for affected clients. The clients are sent
+# push notifications if necessary. The same message is only sent once to a client.
 update = ->
     console.log "Fetching news and disruptions updates"
     
@@ -308,8 +355,11 @@ update = ->
         response.on 'end', ->
             # object with key nodes, its value is an array, array contains objects 
             # with key node, and that is an object with keys title, body, Lines, Main category
-            jsonObj = JSON.parse responseData
-            parseNewsResponse jsonObj
+            try
+                jsonObj = JSON.parse responseData
+                parseNewsResponse jsonObj
+            catch error
+                console.error "JSON parse error in news response: #{ error }"
         
         response.on 'error', (err) -> console.error err
     
