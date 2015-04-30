@@ -119,8 +119,12 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                     if resObj.message_id? and resObj.registration_id?
                                         # must replace the client registration id with
                                         # the new resObj id (canonical id)
+                                        console.log "GCM client id changed. Updating database."
                                         # modify database
                                         Subscription.update { clientId: msg.clientId },
+                                            { clientId: resObj.registration_id },
+                                            (err) -> console.error err if err
+                                        SentMessageHash.update { clientId: msg.clientId },
                                             { clientId: resObj.registration_id },
                                             (err) -> console.error err if err
                                         # no need to resend, GCM just informed us
@@ -128,7 +132,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                     else if resObj.error?
                                         if resObj.error == 'Unavailable'
                                             # GCM server unavailable, retry
-                                            # remove the message document before trying to push it again
+                                            # remove the message hash document before trying to push it again
                                             msgHashDoc.remove (err) ->
                                                 console.error err if err
                                                 timeout =

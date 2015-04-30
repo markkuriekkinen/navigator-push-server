@@ -66,23 +66,25 @@ subscriptionSchema.pre 'validate', (next) ->
     next()
 
 
-sentMessageHashSchema = mongoose.Schema {
-    _id:  # binary sha1 hash of client id and message data
-        type: Buffer
-        unique: true
+sentMessageHashSchema = mongoose.Schema
+    # clientId is needed so that old sent messages can be removed when
+    # the client deregisters or registers again and so that it can be
+    # updated when it changes
+    clientId:  # Google Cloud Messaging register_id for the client
+        type: String
+        index: true
+    hash: Buffer  # binary sha1 hash of message data
     expirationTime:  # MongoDB will autoremove this after this time
         type: Date
         # delete after this many seconds after expirationTime (should
         # be >0 to guard against clock skew and other weirdness)
         expires: 60*60*24
-    clientId:  # Google Cloud Messaging register_id for the client
-        # clientId is needed so that old sent messages can be removed when
-        # the client registers again
-        type: String
-        index: true
-        required: true
-        minLength: 1
-}
+
+sentMessageHashSchema.index
+        clientId: 1
+        hash: 1
+    ,
+        unique: true
 
 # Calculate message hash and store it in the database. Return
 # promise. If the hash is not yet in the database, the hash document
@@ -93,8 +95,6 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
     lines = message.lines
     lines.sort()
     sha1 = crypto.createHash 'sha1'
-    sha1.update message.clientId, 'utf8'
-    sha1.update "\0", 'ascii'
     for line in lines
         sha1.update line, 'utf8'
         sha1.update "\0", 'ascii'
@@ -107,10 +107,10 @@ sentMessageHashSchema.statics.storeHash = (message, callback) ->
     promise = new mongoose.Promise(callback)
     @create(
         {
-            _id: hash
+            clientId: message.clientId
+            hash: hash
             expirationTime:
                 message.validThrough ? (Date.now() + DEFAULT_MSG_EXPIRATION)
-            clientId: message.clientId
         },
         (err, hashDoc) ->
             if err
