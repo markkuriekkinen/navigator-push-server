@@ -193,10 +193,19 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
 # sent to the GCM servers but it is still up to them to decide when
 # the message is really sent to client devices.
 scheduleMessagePush = (msg, inmillisecs) ->
-    # double the timeout for the possible next retry after this one
-    # (exponential back-off)
-    action = () -> pushToClient msg, 2 * inmillisecs
-    setTimeout action, inmillisecs
+    action = ->
+        # remove this timeout from list
+        i = scheduledMessagePushes.indexOf timeout
+        scheduledMessagePushes.splice(i, 1)  if i >= 0
+
+        # double the timeout for the possible next retry after this one
+        # (exponential back-off)
+        pushToClient msg, 2 * inmillisecs
+
+    timeout = setTimeout action, inmillisecs
+    scheduledMessagePushes.push timeout
+
+scheduledMessagePushes = []
 
 # HTTP retry-after header may be a date string or a decimal integer in seconds.
 # Return the timeout in milliseconds from this moment.
@@ -348,6 +357,12 @@ parseDisruptionsResponse = (disrObj) ->
 # push notifications if necessary. The same message is only sent once to a client.
 update = ->
     console.log "Fetching news and disruptions updates"
+    
+    # Abort all scheduled GCM message push retry attempts so that the
+    # number of requests doesn't keep growing if GCM server is down
+    for timeout in scheduledMessagePushes
+        clearTimeout timeout
+    scheduledMessagePushes = []
     
     request = https.request NEWS_URL, (response) ->
         # response from HSL server
