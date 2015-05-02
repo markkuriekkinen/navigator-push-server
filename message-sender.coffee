@@ -119,8 +119,12 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                     if resObj.message_id? and resObj.registration_id?
                                         # must replace the client registration id with
                                         # the new resObj id (canonical id)
+                                        console.log "GCM client id changed. Updating database."
                                         # modify database
                                         Subscription.update { clientId: msg.clientId },
+                                            { clientId: resObj.registration_id },
+                                            (err) -> console.error err if err
+                                        SentMessageHash.update { clientId: msg.clientId },
                                             { clientId: resObj.registration_id },
                                             (err) -> console.error err if err
                                         # no need to resend, GCM just informed us
@@ -128,7 +132,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                                     else if resObj.error?
                                         if resObj.error == 'Unavailable'
                                             # GCM server unavailable, retry
-                                            # remove the message document before trying to push it again
+                                            # remove the message hash document before trying to push it again
                                             msgHashDoc.remove (err) ->
                                                 console.error err if err
                                                 timeout =
@@ -189,10 +193,19 @@ findClients = (lines, areaField, message, disrStartTime, disrEndTime) ->
 # sent to the GCM servers but it is still up to them to decide when
 # the message is really sent to client devices.
 scheduleMessagePush = (msg, inmillisecs) ->
-    # double the timeout for the possible next retry after this one
-    # (exponential back-off)
-    action = () -> pushToClient msg, 2 * inmillisecs
-    setTimeout action, inmillisecs
+    action = ->
+        # remove this timeout from list
+        i = scheduledMessagePushes.indexOf timeout
+        scheduledMessagePushes.splice(i, 1)  if i >= 0
+
+        # double the timeout for the possible next retry after this one
+        # (exponential back-off)
+        pushToClient msg, 2 * inmillisecs
+
+    timeout = setTimeout action, inmillisecs
+    scheduledMessagePushes.push timeout
+
+scheduledMessagePushes = []
 
 # HTTP retry-after header may be a date string or a decimal integer in seconds.
 # Return the timeout in milliseconds from this moment.
@@ -344,6 +357,12 @@ parseDisruptionsResponse = (disrObj) ->
 # push notifications if necessary. The same message is only sent once to a client.
 update = ->
     console.log "Fetching news and disruptions updates"
+    
+    # Abort all scheduled GCM message push retry attempts so that the
+    # number of requests doesn't keep growing if GCM server is down
+    for timeout in scheduledMessagePushes
+        clearTimeout timeout
+    scheduledMessagePushes = []
     
     request = https.request NEWS_URL, (response) ->
         # response from HSL server
