@@ -96,7 +96,7 @@ pushToClient = (msg, retryTimeout = 1000) ->
                             throw "GCM bad request JSON error"
                         else if 500 <= response.statusCode <= 599
                             # GCM server error, retry later
-                            # remove the message document before trying to push it again
+                            # remove the message hash before trying to push again
                             msgHashDoc.remove (err) ->
                                 console.error err if err
                                 timeout =

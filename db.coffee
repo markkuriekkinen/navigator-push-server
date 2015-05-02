@@ -3,8 +3,9 @@ crypto   = require 'crypto'
 
 
 # Expiration time in milliseconds for messages without end
-# time. Should be larger than maximum age of typical such message.
-DEFAULT_MSG_EXPIRATION = 1000*60*60*24*366
+# time. Should be larger than maximum typical client registration
+# time.
+DEFAULT_MSG_EXPIRATION = 1000*60*60*24*2
 
 MONGODB_URI =
     process.env.MONGODB_URI ?   # user configured URI
@@ -24,6 +25,8 @@ connect = (cb) ->
     promise
 
 
+# A client's subscription to receive notifications of a line.
+# Client registration consists of one or more subscriptions.
 subscriptionSchema = mongoose.Schema
     clientId:  # Google Cloud Messaging register_id for the client
         type: String
@@ -66,6 +69,8 @@ subscriptionSchema.pre 'validate', (next) ->
     next()
 
 
+# hash of sent message for detecting whether or not a message has
+# already been sent to a client
 sentMessageHashSchema = mongoose.Schema
     # clientId is needed so that old sent messages can be removed when
     # the client deregisters or registers again and so that it can be
