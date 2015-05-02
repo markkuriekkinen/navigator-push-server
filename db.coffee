@@ -3,8 +3,9 @@ crypto   = require 'crypto'
 
 
 # Expiration time in milliseconds for messages without end
-# time. Should be larger than maximum age of typical such message.
-DEFAULT_MSG_EXPIRATION = 1000*60*60*24*366
+# time. Should be larger than maximum typical client registration
+# time.
+DEFAULT_MSG_EXPIRATION = 1000*60*60*24*2
 
 MONGODB_URI =
     process.env.MONGODB_URI ?   # user configured URI
