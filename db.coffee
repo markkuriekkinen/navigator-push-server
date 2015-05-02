@@ -24,6 +24,8 @@ connect = (cb) ->
     promise
 
 
+# A client's subscription to receive notifications of a line.
+# Client registration consists of one or more subscriptions.
 subscriptionSchema = mongoose.Schema
     clientId:  # Google Cloud Messaging register_id for the client
         type: String
@@ -66,6 +68,8 @@ subscriptionSchema.pre 'validate', (next) ->
     next()
 
 
+# hash of sent message for detecting whether or not a message has
+# already been sent to a client
 sentMessageHashSchema = mongoose.Schema
     # clientId is needed so that old sent messages can be removed when
     # the client deregisters or registers again and so that it can be
