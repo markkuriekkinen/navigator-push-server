@@ -45,8 +45,9 @@ above.
    milliseconds for fetching updates from HSL servers.
 *  `GCM_PUSH_API_KEY` (message sender only, required): Google Cloud
    Messaging API key.
-*  `TEST_PUSH`: if set to anything except `false`, `no`, `off`, or
-   `0`, enable sending test messages. See below.
+*  `TEST_PUSH` (HTTP server only, optional): if set to anything except
+   `false`, `no`, `off`, or `0`, enable sending test messages. See
+   below.
 
 ## Sending test messages
 
@@ -68,7 +69,16 @@ clients that have already received the message.
 
 # Heroku deployment
 
-TODO: sleeping web dyno note
+The server can be deployed to Heroku as described below. However, note
+that if there is only one 1X or 2X web dyno, Heroku puts it into sleep
+mode after 1 hour of no HTTP requests. As a consequence, it is not
+possible to use `start-both.coffee` in production with Heroku, because
+there can be only one message sender instance, and if it goes to
+sleep, messages are not sent. For testing and development, there is a
+separate branch, `shared-heroku-dyno`, with Procfile that runs
+`start-both.coffee` in a single shared dyno that can go to sleep.
+
+Deployment instructions:
 
 1.  `heroku login`
 2.  Create Heroku application: `heroku apps:create --region eu`
@@ -76,7 +86,8 @@ TODO: sleeping web dyno note
     (see [MongoLab documentation][] for more information)
 4.  Set Google Cloud Messaging API key: `heroku config:set GCM_PUSH_API_KEY=...`
 5.  `git push heroku master`
-6.  `heroku ps:scale web=1 worker=1`
+6.  `heroku ps:scale web=1 worker=1` (there can be many web dynos, but
+    there should be only one worker dyno)
 
 
 [MongoLab]: https://addons.heroku.com/mongolab
