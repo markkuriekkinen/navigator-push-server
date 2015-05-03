@@ -1,7 +1,7 @@
 # navigator-push-server
 
 Server for pushing traffic disruption notifications to navigator
-clients.
+clients (<https://github.com/jannesuo/navigator-proto>).
 
 The server consists of two parts: HTTP server and message sender. They
 can be run in the same process or as two separate applications that
