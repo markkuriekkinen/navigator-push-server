@@ -92,3 +92,9 @@ Deployment instructions:
 
 [MongoLab]: https://addons.heroku.com/mongolab
 [MongoLab documentation]: https://devcenter.heroku.com/articles/mongolab
+
+# Terms of use
+All the source code in this repository is licensed with MIT open source
+license. The software code is provided "as is" and is free for use in
+any open source applications.
+

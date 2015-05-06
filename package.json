@@ -15,7 +15,7 @@
     "url": "https://github.com/Mankro/navigator-push-server.git"
   },
   "author": "Aalto Mobile Systems Programming 2015, group HSL#3",
-  "license": "TODO",
+  "license": "MIT",
   "dependencies": {
     "coffee-script": "1.9.1",
     "body-parser": "^1.12.2",
